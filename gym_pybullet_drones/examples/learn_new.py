@@ -36,10 +36,11 @@ from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, Obs
 from tqdm import tqdm
 
 # --- 默认参数配置 ---
-DEFAULT_GUI = True
+DEFAULT_GUI = False            # 训练时关闭 GUI (快很多); 测试阶段自动打开
 DEFAULT_RECORD_VIDEO = False
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
+DEFAULT_TIMESTEPS = int(1e6)   # 总训练步数
 
 DEFAULT_OBS = ObservationType.KIN # 运动学观测
 DEFAULT_ACT = ActionType.PID    # 推荐使用速度控制 ('pid') 以实现更好的路径追踪
@@ -87,7 +88,7 @@ class TqdmCallback(BaseCallback):
     def _on_training_end(self):
         self.pbar.close()
 
-def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO, local=True):
+def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO, local=True, timesteps=DEFAULT_TIMESTEPS):
 
     filename = os.path.join(output_folder, 'save-'+datetime.now().strftime("%m.%d.%Y_%H.%M.%S"))
     if not os.path.exists(filename):
@@ -102,24 +103,14 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
         act=DEFAULT_ACT,
     )
 
-    if not multiagent:
-        train_env = make_vec_env(GlobalPlannerAviary,
-                                 env_kwargs=env_kwargs,
-                                 n_envs=1,
-                                 seed=0
-                                 )
-        eval_env = GlobalPlannerAviary(**env_kwargs, 
-                                 gui = DEFAULT_GUI)
-    else:
-        # 多智能体逻辑，需确保 GlobalPlannerAviary 支持 num_drones 参数
+    if multiagent:
         env_kwargs["num_drones"] = DEFAULT_AGENTS
-        train_env = make_vec_env(GlobalPlannerAviary,
-                                 env_kwargs=env_kwargs,
-                                 n_envs=1,
-                                 seed=0
-                                 )
-        eval_env = GlobalPlannerAviary(**env_kwargs, 
-                                 gui = DEFAULT_GUI)
+    train_env = make_vec_env(GlobalPlannerAviary,
+                             env_kwargs=env_kwargs,
+                             n_envs=1,
+                             seed=0)
+    # 评测环境不开 GUI, 以免每次 eval 都渲染拖慢训练
+    eval_env = GlobalPlannerAviary(**env_kwargs, gui=False)
 
     #### 打印空间信息 ########################################
     # print('[INFO] Action space:', train_env.action_space)
@@ -129,15 +120,16 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     model = PPO('MlpPolicy',
                 train_env,
                 # tensorboard_log=filename+'/tb/',
-                learning_rate=0.0003,      # 学习率
-                n_steps=4800,               # 每次更新前收集的数据步数
-                batch_size=64,              # 每次优化时的批次大小
-                gamma=0.99,                 # 折扣因子（对未来奖励的重视程度）
-                gae_lambda=0.95,            # GAE 参数
-                clip_range=0.2,             # PPO 裁剪范围
-                ent_coef=0.01,              # 熵系数（鼓励探索）
+                learning_rate=3e-4,
+                n_steps=2048,
+                batch_size=64,
+                n_epochs=10,
+                gamma=0.99,
+                gae_lambda=0.95,
+                clip_range=0.2,
+                ent_coef=0.0,
                 verbose=1,
-                device= 'cuda')
+                device='auto')
     # model = PPO.load("D:\\homework\\Grade3_2\\drone\\gym-pybullet-drones-main\\results\\save-04.17.2026_12.01.43\\final_model.zip", env= train_env)
     #### 目标奖励阈值 (根据路径点数量调整) #######################
     # 路径追踪任务通常需要更长的时间，target_reward 需根据实际奖励曲线调整
@@ -150,17 +142,18 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                                  verbose=1,
                                  best_model_save_path=filename+'/',
                                  log_path=filename+'/',
-                                 eval_freq=int(1000),
+                                 eval_freq=10000,
+                                 n_eval_episodes=3,
                                  deterministic=True,
-                                 render=True)
+                                 render=False)
 
     iteration_callback = IterationCounterCallback()
-    total_timesteps = int(2e6)
+    total_timesteps = timesteps if local else int(1e4)
     tqdm_callback = TqdmCallback(total_timesteps)
 
-    model.learn(total_timesteps=int(2e6) if local else int(1e4), 
+    model.learn(total_timesteps=total_timesteps,
                 callback=[eval_callback, iteration_callback, tqdm_callback],
-                log_interval=100)
+                log_interval=10)
 
     #### 保存模型 #############################################
     model.save(filename+'/final_model.zip')
@@ -243,6 +236,7 @@ if __name__ == '__main__':
     parser.add_argument('--gui',                default=DEFAULT_GUI,           type=str2bool)
     parser.add_argument('--record_video',       default=DEFAULT_RECORD_VIDEO,  type=str2bool)
     parser.add_argument('--output_folder',      default=DEFAULT_OUTPUT_FOLDER, type=str)
+    parser.add_argument('--timesteps',          default=DEFAULT_TIMESTEPS,     type=int)
     ARGS = parser.parse_args()
 
     run(**vars(ARGS))
