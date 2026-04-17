@@ -47,7 +47,9 @@ class GlobalPlannerAviary(BaseRLAviary):
         # --- 规划相关参数必须在父类调用前准备好 (父类会调 _addObstacles / _actionSpace) ---
         self.START = np.asarray(start, dtype=float)
         self.GOAL = np.asarray(goal, dtype=float)
-        self.OBSTACLES = obstacles if obstacles is not None else default_obstacles()
+        # 注意: BaseAviary 存在同名 bool 属性 self.OBSTACLES (在 super().__init__ 里赋值),
+        # 这里用 OBSTACLE_LIST 避免被父类覆盖.
+        self.OBSTACLE_LIST = obstacles if obstacles is not None else default_obstacles()
         self.ARRIVAL_RADIUS = arrival_radius
         self.COLLISION_PENALTY = collision_penalty
         self.WORKSPACE = workspace_bounds
@@ -77,7 +79,7 @@ class GlobalPlannerAviary(BaseRLAviary):
         planner = AStarPlanner(grid_size=0.2,
                                x_range=xr, y_range=yr, z_range=zr,
                                safety_margin=0.2)
-        raw = planner.plan(self.START, self.GOAL, self.OBSTACLES)
+        raw = planner.plan(self.START, self.GOAL, self.OBSTACLE_LIST)
         if raw is None:
             print('[GlobalPlannerAviary] A* 失败, 使用起点->终点直线作为路径')
             raw = np.stack([self.START, self.GOAL], axis=0)
@@ -91,8 +93,8 @@ class GlobalPlannerAviary(BaseRLAviary):
     # -------------------------------------------------------------- PyBullet
 
     def _addObstacles(self):
-        """把 self.OBSTACLES 里的球体加到 PyBullet 里 (固定, 与训练/规划一致)."""
-        for (center, radius) in self.OBSTACLES:
+        """把 self.OBSTACLE_LIST 里的球体加到 PyBullet 里 (固定, 与训练/规划一致)."""
+        for (center, radius) in self.OBSTACLE_LIST:
             col = p.createCollisionShape(p.GEOM_SPHERE, radius=radius,
                                          physicsClientId=self.CLIENT)
             vis = p.createVisualShape(p.GEOM_SPHERE, radius=radius,
@@ -221,7 +223,7 @@ class GlobalPlannerAviary(BaseRLAviary):
 
     def _min_obs_distance(self, pos):
         d_min = np.inf
-        for (c, r) in self.OBSTACLES:
+        for (c, r) in self.OBSTACLE_LIST:
             d = np.linalg.norm(pos - np.asarray(c)) - r
             if d < d_min:
                 d_min = d
