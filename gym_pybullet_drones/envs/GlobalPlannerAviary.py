@@ -148,6 +148,31 @@ class GlobalPlannerAviary(BaseRLAviary):
             p.addUserDebugText(f"wp{i}", wp + [0, 0, 0.08],
                                textColorRGB=[1, 1, 0], textSize=0.8,
                                physicsClientId=self.CLIENT)
+        
+        # 障碍物（红色半透明球）
+        for i, (center, radius) in enumerate(self.OBSTACLE_LIST):
+            vis_id = p.createVisualShape(
+                shapeType=p.GEOM_SPHERE,
+                radius=radius,
+                rgbaColor=[1, 0, 0, 0.3],  # 半透明
+                physicsClientId=self.CLIENT
+            )
+        
+            body_id = p.createMultiBody(
+                baseMass=0,  # 不参与动力学
+                baseVisualShapeIndex=vis_id,
+                basePosition=list(center),
+                physicsClientId=self.CLIENT
+            )
+        
+            # 可选：加标签
+            p.addUserDebugText(
+                f"obs{i}",
+                np.array(center) + np.array([0, 0, radius + 0.1]),
+                textColorRGB=[1, 0, 0],
+                textSize=0.8,
+                physicsClientId=self.CLIENT
+            )
 
     # -------------------------------------------------------------- RL API
 

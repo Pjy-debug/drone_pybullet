@@ -36,11 +36,11 @@ from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, Obs
 from tqdm import tqdm
 
 # --- 默认参数配置 ---
-DEFAULT_GUI = False            # 训练时关闭 GUI (快很多); 测试阶段自动打开
+DEFAULT_GUI =True           # 训练时关闭 GUI (快很多); 测试阶段自动打开
 DEFAULT_RECORD_VIDEO = False
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
-DEFAULT_TIMESTEPS = int(1e6)   # 总训练步数
+DEFAULT_TIMESTEPS = int(2e6)   # 总训练步数
 
 DEFAULT_OBS = ObservationType.KIN # 运动学观测
 DEFAULT_ACT = ActionType.PID    # 推荐使用速度控制 ('pid') 以实现更好的路径追踪
@@ -110,7 +110,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                              n_envs=1,
                              seed=0)
     # 评测环境不开 GUI, 以免每次 eval 都渲染拖慢训练
-    eval_env = GlobalPlannerAviary(**env_kwargs, gui=False)
+    eval_env = GlobalPlannerAviary(**env_kwargs, gui=DEFAULT_GUI)
 
     #### 打印空间信息 ########################################
     # print('[INFO] Action space:', train_env.action_space)
@@ -143,7 +143,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                                  best_model_save_path=filename+'/',
                                  log_path=filename+'/',
                                  eval_freq=10000,
-                                 n_eval_episodes=3,
+                                 n_eval_episodes=1,
                                  deterministic=True,
                                  render=False)
 
@@ -166,7 +166,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     model = PPO.load(path)
 
     #### 测试与演示 ###########################################
-    test_env = GlobalPlannerAviary(gui=gui,
+    test_env = GlobalPlannerAviary(gui=False,
                                    start=CUSTOM_START,
                                    goal=CUSTOM_GOAL,
                                    obstacles=CUSTOM_OBSTACLES,
@@ -175,7 +175,8 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                                    record=record_video,
                                    num_drones=DEFAULT_AGENTS if multiagent else 1)
 
-    test_env_nogui = GlobalPlannerAviary(start=CUSTOM_START,
+    test_env_nogui = GlobalPlannerAviary(gui=False,
+                                         start=CUSTOM_START,
                                          goal=CUSTOM_GOAL,
                                          obstacles=CUSTOM_OBSTACLES,
                                          obs=DEFAULT_OBS,
