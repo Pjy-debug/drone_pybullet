@@ -1,7 +1,7 @@
 import numpy as np
 
 # 替换为你实际的文件路径
-path = '/root/gym-pybullet-drones-main/results/save-04.17.2026_00.30.17/evaluations.npz'
+path = 'D:\\homework\\Grade3_2\\drone\\gym-pybullet-drones-main\\gym_pybullet_drones\\results\\save-04.18.2026_18.10.18\\evaluations.npz'
 data = np.load(path)
 
 print("文件包含的键:", data.files)

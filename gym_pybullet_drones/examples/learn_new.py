@@ -36,11 +36,11 @@ from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, Obs
 from tqdm import tqdm
 
 # --- 默认参数配置 ---
-DEFAULT_GUI =True           # 训练时关闭 GUI (快很多); 测试阶段自动打开
+DEFAULT_GUI = True        # 训练时关闭 GUI (快很多); 测试阶段自动打开
 DEFAULT_RECORD_VIDEO = False
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
-DEFAULT_TIMESTEPS = int(2e6)   # 总训练步数
+DEFAULT_TIMESTEPS = int(250)   # 总训练步数
 
 DEFAULT_OBS = ObservationType.KIN # 运动学观测
 DEFAULT_ACT = ActionType.PID    # 推荐使用速度控制 ('pid') 以实现更好的路径追踪
@@ -119,9 +119,9 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     #### 训练模型 #############################################
     model = PPO('MlpPolicy',
                 train_env,
-                # tensorboard_log=filename+'/tb/',
+                tensorboard_log=filename+'/tb/',
                 learning_rate=3e-4,
-                n_steps=2048,
+                n_steps=64,
                 batch_size=64,
                 n_epochs=10,
                 gamma=0.99,
@@ -130,7 +130,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                 ent_coef=0.0,
                 verbose=1,
                 device='auto')
-    # model = PPO.load("D:\\homework\\Grade3_2\\drone\\gym-pybullet-drones-main\\results\\save-04.17.2026_12.01.43\\final_model.zip", env= train_env)
+    # model = PPO.load("D:\\homework\\Grade3_2\\drone\\gym-pybullet-drones-main\\gym_pybullet_drones\\results\\save-04.24.2026_00.05.34\\best_model.zip", env= train_env, tensorboard_log=filename+'/tb/')
     #### 目标奖励阈值 (根据路径点数量调整) #######################
     # 路径追踪任务通常需要更长的时间，target_reward 需根据实际奖励曲线调整
     target_reward = 1000. if not multiagent else 2000.
@@ -142,7 +142,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                                  verbose=1,
                                  best_model_save_path=filename+'/',
                                  log_path=filename+'/',
-                                 eval_freq=10000,
+                                 eval_freq=100,
                                  n_eval_episodes=1,
                                  deterministic=True,
                                  render=False)
@@ -150,7 +150,6 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     iteration_callback = IterationCounterCallback()
     total_timesteps = timesteps if local else int(1e4)
     tqdm_callback = TqdmCallback(total_timesteps)
-
     model.learn(total_timesteps=total_timesteps,
                 callback=[eval_callback, iteration_callback, tqdm_callback],
                 log_interval=10)
