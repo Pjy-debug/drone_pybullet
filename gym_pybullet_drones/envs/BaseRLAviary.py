@@ -191,7 +191,6 @@ class BaseRLAviary(BaseAviary):
         rpm = np.zeros((self.NUM_DRONES,4))
         for k in range(action.shape[0]):
             target = action[k, :]
-            print(f'for drone {k}, original action: {target}')
             if self.ACT_TYPE == ActionType.RPM:
                 rpm[k,:] = np.array(self.HOVER_RPM * (1+0.05*target))
             elif self.ACT_TYPE == ActionType.PID:

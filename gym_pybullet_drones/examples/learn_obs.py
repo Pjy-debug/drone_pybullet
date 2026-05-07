@@ -36,7 +36,7 @@ from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, Obs
 from tqdm import tqdm
 
 # --- 默认参数配置 ---
-DEFAULT_GUI = False           # 训练时关闭 GUI (快很多); 测试阶段自动打开
+DEFAULT_GUI = True           # 训练时关闭 GUI (快很多); 测试阶段自动打开
 DEFAULT_RECORD_VIDEO = False
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
@@ -48,7 +48,7 @@ DEFAULT_AGENTS = 1
 DEFAULT_MA = False
 
 # --- 全局规划: 起点 / 终点 / 障碍 (训练 & 推理使用同一套) ---
-CUSTOM_START = np.array([0.0, 0.0, 0.5])
+CUSTOM_START = np.array([0.0, 0.0, 0.0])
 CUSTOM_GOAL  = np.array([3.5, 0.0, 1.2])
 # 每个障碍: (中心坐标, 半径). 训练过程中保持固定.
 CUSTOM_OBSTACLES = [
@@ -107,7 +107,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
         env_kwargs["num_drones"] = DEFAULT_AGENTS
     train_env = make_vec_env(GlobalPlannerAviary,
                              env_kwargs=env_kwargs,
-                             n_envs=72,
+                             n_envs=1,
                              seed=0)
     # 评测环境不开 GUI, 以免每次 eval 都渲染拖慢训练
     eval_env = GlobalPlannerAviary(**env_kwargs, gui=DEFAULT_GUI)
@@ -117,20 +117,20 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     # print('[INFO] Observation space:', train_env.observation_space)
 
     #### 训练模型 #############################################
-    # model = PPO('MlpPolicy',
-    #             train_env,
-    #             tensorboard_log=filename+'/tb/',
-    #             learning_rate=3e-4,
-    #             n_steps=512,
-    #             batch_size=1024,
-    #             n_epochs=10,
-    #             gamma=0.99,
-    #             gae_lambda=0.95,
-    #             clip_range=0.2,
-    #             ent_coef=0.0,
-    #             verbose=1,
-    #             device='auto')
-    model = PPO.load("/root/results/save-04.24.2026_09.52.03/best_model.zip", env= train_env)
+    model = PPO('MlpPolicy',
+                train_env,
+                tensorboard_log=filename+'/tb/',
+                learning_rate=3e-4,
+                n_steps=512,
+                batch_size=1024,
+                n_epochs=10,
+                gamma=0.99,
+                gae_lambda=0.95,
+                clip_range=0.2,
+                ent_coef=0.0,
+                verbose=1,
+                device='auto')
+    # model = PPO.load("/root/results/save-04.24.2026_09.52.03/best_model.zip", env= train_env)
     #### 目标奖励阈值 (根据路径点数量调整) #######################
     # 路径追踪任务通常需要更长的时间，target_reward 需根据实际奖励曲线调整
     target_reward = 1000. if not multiagent else 2000.
@@ -142,7 +142,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                                  verbose=1,
                                  best_model_save_path=filename+'/',
                                  log_path=filename+'/',
-                                 eval_freq=2000,
+                                 eval_freq=20,
                                  n_eval_episodes=3,
                                  deterministic=True,
                                  render=False)

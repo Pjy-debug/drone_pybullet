@@ -17,6 +17,7 @@ from gymnasium import spaces
 from envs.BaseRLAviary import BaseRLAviary
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 from gym_pybullet_drones.utils.AStarPlanner import AStarPlanner
+from utils.SceneGenerator import SceneGenerator
 
 
 IS_DEBUG = True
@@ -40,18 +41,27 @@ class GlobalPlannerAviary(BaseRLAviary):
                  obstacles=None,
                  waypoint_spacing: float = 0.6,
                  arrival_radius: float = 0.15,
-                 workspace_bounds=((-1.0, 5.0), (-3.0, 3.0), (0.1, 2.5)),
+                 workspace_bounds=((-1.0, 5.0), (-3.0, 3.0), (-0.1, 2.5)),
                  act_scale: float = None,   # 预留, 当前未使用
                  collision_penalty: float = 50.0,
                  **kwargs):
         # --- 规划相关参数必须在父类调用前准备好 (父类会调 _addObstacles / _actionSpace) ---
         if IS_DEBUG:
             print(f'工作空间限制: x={workspace_bounds[0]}, y={workspace_bounds[1]}, z={workspace_bounds[2]}')
-        self.START = np.asarray(start, dtype=float)
-        self.GOAL = np.asarray(goal, dtype=float)
+
+        if 1:
+            scene_gen = SceneGenerator(
+                x_range=(-1.0, 5.0), 
+                y_range=(-3.0, 3.0), 
+                z_range=(-0.1, 2.5)
+            )
+    
+            random_start, random_goal, random_obstacles = scene_gen.generate_scene(num_obstacles=4)
+        self.START = np.asarray(random_start, dtype=float)
+        self.GOAL = np.asarray(random_goal, dtype=float)
         # 注意: BaseAviary 存在同名 bool 属性 self.OBSTACLES (在 super().__init__ 里赋值),
         # 这里用 OBSTACLE_LIST 避免被父类覆盖.
-        self.OBSTACLE_LIST = obstacles if obstacles is not None else default_obstacles()
+        self.OBSTACLE_LIST = random_obstacles if random_obstacles is not None else default_obstacles()
         self.ARRIVAL_RADIUS = arrival_radius
         self.COLLISION_PENALTY = collision_penalty
         self.WORKSPACE = workspace_bounds
@@ -185,6 +195,24 @@ class GlobalPlannerAviary(BaseRLAviary):
     def reset(self, seed=None, options=None):
         if IS_DEBUG:
             print('\n[GlobalPlannerAviary] reset called. 重新规划路径, 重置 waypoint 计数器.')
+        scene_gen = SceneGenerator(
+                x_range=(-1.0, 5.0), 
+                y_range=(-3.0, 3.0), 
+                z_range=(-0.1, 2.5)
+            )
+    
+        random_start, random_goal, random_obstacles = scene_gen.generate_scene(num_obstacles=4)
+        self.START = np.asarray(random_start, dtype=float)
+        self.INIT_XYZS = self.START.reshape(1, 3)
+        self.GOAL = np.asarray(random_goal, dtype=float)
+        # 注意: BaseAviary 存在同名 bool 属性 self.OBSTACLES (在 super().__init__ 里赋值),
+        # 这里用 OBSTACLE_LIST 避免被父类覆盖.
+        self.OBSTACLE_LIST = random_obstacles if random_obstacles is not None else default_obstacles()
+        # --- 跑 A*, 生成 waypoints ---
+        self.WAYPOINTS = self._plan_path()
+
+        self.EPISODE_LEN_SEC = 25
+        self.num_waypoints = self.WAYPOINTS.shape[0]
         self.wp_counters = np.zeros(self.NUM_DRONES, dtype=int)
         obs, info = super().reset(seed=seed, options=options)
         if self.GUI:
@@ -203,13 +231,13 @@ class GlobalPlannerAviary(BaseRLAviary):
         #               (self.NUM_DRONES, 1))
         # high = np.tile(np.array([xr[1], yr[1], zr[1]], dtype=np.float32),
         #                (self.NUM_DRONES, 1))
-        low = np.tile(np.array([-1.0,-1.0,-1.0], dtype=np.float32),
+        low = np.tile(np.array([-1.0,-1.0,-1.0,-0.25,-0.25,-0.25,-1.0,-1.0,-1.0], dtype=np.float32),
                       (self.NUM_DRONES, 1))
-        high = np.tile(np.array([1.0,1.0,1.0], dtype=np.float32),
+        high = np.tile(np.array([1.0,1.0,1.0,0.25,0.25,0.25,1.0,1.0,1.0], dtype=np.float32),
                        (self.NUM_DRONES, 1))
         # 父类在 _actionSpace 里填充 action_buffer, 这里也需要保证一致
         for _ in range(self.ACTION_BUFFER_SIZE):
-            self.action_buffer.append(np.zeros((self.NUM_DRONES, 3), dtype=np.float32))
+            self.action_buffer.append(np.zeros((self.NUM_DRONES, 9), dtype=np.float32))
         return spaces.Box(low=low, high=high, dtype=np.float32)
 
     def _preprocessAction(self, action):
@@ -221,11 +249,15 @@ class GlobalPlannerAviary(BaseRLAviary):
         rpm = np.zeros((self.NUM_DRONES, 4))
         for k in range(self.NUM_DRONES):
             state = self._getDroneStateVector(k)
-            target_dir = np.asarray(action[k, :], dtype=float)
-            target_pos = target_dir + state[0:3]  # 目标位置 = 当前坐标 + action 指定的相对位置
+            action_asarray = np.asarray(action[k, :], dtype=float)
+            target_pos = action_asarray[0:3] + state[0:3]  # 目标位置 = 当前坐标 + action 指定的相对位置
             next_pos = self._calculateNextStep(current_position=state[0:3],
                                                destination=target_pos,
                                                step_size=1)
+            delta_vel = action_asarray[3:6]
+            next_vel = delta_vel + state[10:13]  # 目标速度 = 当前速度 + action 指定的相对速度
+            delta_ang = action_asarray[6:9]
+            next_ang = delta_ang + state[7:10]  # 目标角度 = 当前角度 + action 指定的相对角度
             rpm_k, _, _ = self.ctrl[k].computeControl(
                 control_timestep=self.CTRL_TIMESTEP,
                 cur_pos=state[0:3],
@@ -233,6 +265,8 @@ class GlobalPlannerAviary(BaseRLAviary):
                 cur_vel=state[10:13],
                 cur_ang_vel=state[13:16],
                 target_pos=next_pos,
+                target_rpy=next_ang,
+                target_vel=next_vel
             )
             rpm[k, :] = rpm_k
         return rpm
@@ -244,6 +278,7 @@ class GlobalPlannerAviary(BaseRLAviary):
         if self.OBS_TYPE == ObservationType.KIN:
             shape = obs_space.shape
             new_dim = shape[-1] + 3  # 追加当前目标的相对位置
+            new_dim = new_dim + 2*(9-3)
             return spaces.Box(low=-np.inf, high=np.inf,
                               shape=(self.NUM_DRONES, new_dim), dtype=np.float32)
         return obs_space
@@ -255,6 +290,8 @@ class GlobalPlannerAviary(BaseRLAviary):
             state = self._getDroneStateVector(i)
             cur_wp = self.WAYPOINTS[self.wp_counters[i]]
             target_info[i, :] = cur_wp - state[0:3]
+        if IS_DEBUG:
+            print(f'for drone{i}, final_obs: {np.hstack([root_obs, target_info]).astype(np.float32)}')
         return np.hstack([root_obs, target_info]).astype(np.float32)
 
     # ---- reward -------------------------------------------------------------
@@ -319,9 +356,9 @@ class GlobalPlannerAviary(BaseRLAviary):
                 print('朝向奖励：', float(np.dot(vel_dir, dir_wp)) * speed)
 
             # 2) 高度
-            rewards[i] += -abs(pos[2] - target_wp[2]) * 5.0
+            rewards[i] += -(pos[2] - target_wp[2])**2 * 2.5
             if IS_DEBUG:
-                print('高度奖励：', -abs(pos[2] - target_wp[2]) * 5.0)
+                print('高度奖励：', -(pos[2] - target_wp[2])**2 * 2.5)
 
             # 3) 到达 waypoint 奖励
             if dist < self.ARRIVAL_RADIUS:

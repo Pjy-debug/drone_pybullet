@@ -19,18 +19,20 @@ from utils.Logger import Logger
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 
 # --- 配置参数 (需与训练时保持一致) ---
-MODEL_PATH = "D:\\homework\\Grade3_2\\drone\\gym-pybullet-drones-main\\gym_pybullet_drones\\results\\save-04.24.2026_03.24.42\\best_model.zip"
+MODEL_PATH = "D:\homework\Grade3_2\drone\gym-pybullet-drones-main\gym_pybullet_drones\\results\save-05.06.2026_03.03.24\\best_model.zip"
 GUI = True              # 测试时建议打开可视化
 RECORD_VIDEO = False
-NUM_EPISODES = 3        # 测试的回合数
+NUM_EPISODES = 300        # 测试的回合数
 
-CUSTOM_START = np.array([0.0, 0.0, 0.5])
+CUSTOM_START = np.array([0.0, 0.0, 0.0])
 CUSTOM_GOAL  = np.array([3.5, 0.0, 1.2])
 CUSTOM_OBSTACLES = [
     (np.array([1.0, 0.2, 1.0]), 0.35),
     (np.array([2.2, -0.3, 1.3]), 0.4),
     (np.array([1.5, 1.5, 0.8]), 0.3),
 ]
+
+
 
 def test():
     #### 1. 加载环境 #############################################
