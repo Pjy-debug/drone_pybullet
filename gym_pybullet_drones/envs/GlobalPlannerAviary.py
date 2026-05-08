@@ -20,7 +20,7 @@ from gym_pybullet_drones.utils.AStarPlanner import AStarPlanner
 from utils.SceneGenerator import SceneGenerator
 
 
-IS_DEBUG = True
+IS_DEBUG = False
 
 
 def default_obstacles():
@@ -343,78 +343,58 @@ class GlobalPlannerAviary(BaseRLAviary):
         return d_min
 
     def _computeReward(self):
+        """量纲调平后的 reward.
+
+        设计思路:
+            - 距离 shaping 用 (dist_prev - dist_now) * k_dist, k_dist 适中, 让单 step 量级 ~ 0.01
+            - 终点 / waypoint 奖励远大于 shaping 累计, 强迫 agent 真正到达
+            - 撞障碍给一次性大额惩罚 (episode 也会被 terminate)
+            - 姿态 / 高度只做温和正则, 避免与距离 shaping 冲突
+        """
         rewards = np.zeros(self.NUM_DRONES)
         for i in range(self.NUM_DRONES):
             state = self._getDroneStateVector(i)
-            if IS_DEBUG:
-                print('\n')
-                print(f'当前状态：位置={state[0:3]}, 速度={state[10:13]}, 角度={state[7:10]}')
             pos = state[0:3]
             vel = state[10:13]
             target_wp = self.WAYPOINTS[self.wp_counters[i]]
             to_wp = target_wp - pos
             dist = np.linalg.norm(to_wp)
-            dir_wp = to_wp / (dist + 1e-6)
-            speed = np.linalg.norm(vel)
-            vel_dir = vel / (speed + 1e-6)
 
-            # 0) 距离奖励
+            # 0) 距离 shaping (potential-based): 接近 waypoint 给正奖励
             next_pos = pos + vel * self.CTRL_TIMESTEP
             next_dist = np.linalg.norm(target_wp - next_pos)
-            rewards[i] += -1 * (next_dist - dist)*500
-            if IS_DEBUG:
-                print('距离奖励：', -1* (next_dist - dist)*500)
+            rewards[i] += (dist - next_dist) * 50.0
 
-            # 1) 朝向 waypoint 的速度投影奖励
-            rewards[i] += float(np.dot(vel_dir, dir_wp)) * speed
-            if IS_DEBUG:
-                print('朝向奖励：', float(np.dot(vel_dir, dir_wp)) * speed)
+            # 1) 每步存活的小负奖励, 鼓励尽快完成
+            rewards[i] += -0.01
 
-            # 2) 高度
-            rewards[i] += -(pos[2] - target_wp[2])**2 * 2.5
-            if IS_DEBUG:
-                print('高度奖励：', -(pos[2] - target_wp[2])**2 * 2.5)
-
-            # 3) 到达 waypoint 奖励
+            # 2) 到达 waypoint / 终点
             if dist < self.ARRIVAL_RADIUS:
                 if self.wp_counters[i] < self.num_waypoints - 1:
-                    rewards[i] += 50.0
+                    rewards[i] += 20.0
                     self.wp_counters[i] += 1
-                    print('到达 waypoint 奖励：10.0, 下一个目标：wp%d' % self.wp_counters[i], 'wp位置：', target_wp)
                 else:
-                    rewards[i] += 500.0
-                    print('到达最终目标奖励：100.0')
+                    rewards[i] += 200.0  # 到达最终目标 (episode 也会 terminate)
 
-            # 4) 避障惩罚: 离最近障碍越近罚越多, 进入障碍体则大额惩罚
-            obs_threshold = 0.2
+            # 3) 避障: 进入障碍体一次性重罚 (episode 会被 terminate); 接近时温和惩罚
+            obs_threshold = 0.15
             d_obs = self._min_obs_distance(pos)
             if d_obs < 0.0:
-                rewards[i] -= self.COLLISION_PENALTY
+                rewards[i] -= 200.0
             elif d_obs < obs_threshold:
-                rewards[i] -= (obs_threshold - d_obs) * 100.0
-            if IS_DEBUG:
-                print('避障惩罚：', -self.COLLISION_PENALTY if d_obs < 0.0 else (- (obs_threshold - d_obs) * 100.0 if d_obs < obs_threshold else 0.0))
+                rewards[i] -= (obs_threshold - d_obs) * 20.0
 
-            # 5) 坠地 / 飞出边界的软惩罚
+            # 4) 越界一次性重罚 (episode 也会 terminate)
             (xr, yr, zr) = self.WORKSPACE
             if (pos[0] < xr[0] or pos[0] > xr[1]
                 or pos[1] < yr[0] or pos[1] > yr[1]
                 or pos[2] < zr[0] or pos[2] > zr[1]):
-                rewards[i] -= 5.0
-            if IS_DEBUG:
-                print('边界惩罚：', -5.0 if (pos[0] < xr[0] or pos[0] > xr[1]
-                    or pos[1] < yr[0] or pos[1] > yr[1]
-                    or pos[2] < zr[0] or pos[2] > zr[1]) else 0.0)
+                rewards[i] -= 100.0
 
-            # 6) 角度惩罚
-            row, pitch, yaw = state[7:10]
-            rewards[i]+=-1*(1.0 * row**2 + 1.0 * pitch**2 + 0.1 * yaw**2)
-            if IS_DEBUG:
-                print(f'角度惩罚：{-1*(1.0 * row**2 + 1.0 * pitch**2 + 0.1 * yaw**2)}')
+            # 5) 姿态正则 (温和)
+            roll, pitch, yaw = state[7:10]
+            rewards[i] += -0.05 * (roll * roll + pitch * pitch) - 0.005 * yaw * yaw
 
-            if IS_DEBUG:
-                print(f"drone{i} dist={dist:.2f} d_obs={d_obs:.2f} "
-                      f"wp={self.wp_counters[i]} wp_pos={target_wp} r={rewards[i]:.2f}")
         return float(rewards.sum()) if self.NUM_DRONES == 1 else rewards
 
     # ---- termination --------------------------------------------------------
