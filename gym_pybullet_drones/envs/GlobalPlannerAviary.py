@@ -44,19 +44,25 @@ class GlobalPlannerAviary(BaseRLAviary):
                  workspace_bounds=((-1.0, 5.0), (-3.0, 3.0), (-0.1, 2.5)),
                  act_scale: float = None,   # 预留, 当前未使用
                  collision_penalty: float = 50.0,
+                 # --- 简化任务: start / goal 在小球形区域随机, 障碍生成在连线上 ---
+                 simple_scene: bool = True,
+                 start_center=(0.0, 0.0, 1.0),
+                 goal_center=(3.5, 0.0, 1.0),
+                 region_radius: float = 0.3,
+                 num_obstacles: int = 2,
                  **kwargs):
         # --- 规划相关参数必须在父类调用前准备好 (父类会调 _addObstacles / _actionSpace) ---
         if IS_DEBUG:
             print(f'工作空间限制: x={workspace_bounds[0]}, y={workspace_bounds[1]}, z={workspace_bounds[2]}')
 
-        if 1:
-            scene_gen = SceneGenerator(
-                x_range=(-1.0, 5.0), 
-                y_range=(-3.0, 3.0), 
-                z_range=(-0.1, 2.5)
-            )
-    
-            random_start, random_goal, random_obstacles = scene_gen.generate_scene(num_obstacles=4)
+        # 保存场景生成参数, reset 时复用
+        self._simple_scene = simple_scene
+        self._start_center = tuple(start_center)
+        self._goal_center = tuple(goal_center)
+        self._region_radius = float(region_radius)
+        self._num_obstacles = int(num_obstacles)
+
+        random_start, random_goal, random_obstacles = self._sample_scene(workspace_bounds)
         self.START = np.asarray(random_start, dtype=float)
         self.GOAL = np.asarray(random_goal, dtype=float)
         # 注意: BaseAviary 存在同名 bool 属性 self.OBSTACLES (在 super().__init__ 里赋值),
@@ -83,6 +89,21 @@ class GlobalPlannerAviary(BaseRLAviary):
         self._dbg_item_ids = []
         if self.GUI:
             self._draw_planning_scene()
+
+    # -------------------------------------------------------------- scene
+
+    def _sample_scene(self, workspace_bounds):
+        """按当前模式随机生成 (start, goal, obstacles)."""
+        (xr, yr, zr) = workspace_bounds
+        scene_gen = SceneGenerator(x_range=xr, y_range=yr, z_range=zr)
+        if self._simple_scene:
+            return scene_gen.generate_scene_on_line(
+                start_center=self._start_center,
+                goal_center=self._goal_center,
+                region_radius=self._region_radius,
+                num_obstacles=self._num_obstacles,
+            )
+        return scene_gen.generate_scene(num_obstacles=self._num_obstacles)
 
     # -------------------------------------------------------------- planning
 
@@ -195,13 +216,7 @@ class GlobalPlannerAviary(BaseRLAviary):
     def reset(self, seed=None, options=None):
         if IS_DEBUG:
             print('\n[GlobalPlannerAviary] reset called. 重新规划路径, 重置 waypoint 计数器.')
-        scene_gen = SceneGenerator(
-                x_range=(-1.0, 5.0), 
-                y_range=(-3.0, 3.0), 
-                z_range=(-0.1, 2.5)
-            )
-    
-        random_start, random_goal, random_obstacles = scene_gen.generate_scene(num_obstacles=4)
+        random_start, random_goal, random_obstacles = self._sample_scene(self.WORKSPACE)
         self.START = np.asarray(random_start, dtype=float)
         self.INIT_XYZS = self.START.reshape(1, 3)
         self.GOAL = np.asarray(random_goal, dtype=float)
