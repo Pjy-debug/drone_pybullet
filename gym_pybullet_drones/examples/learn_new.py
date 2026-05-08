@@ -116,7 +116,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
         entity=WANDB_ENTITY,
         name=run_name,
         config=wandb_config,
-        sync_tensorboard=False,
+        sync_tensorboard=True,   # 让 SB3 写的 TB scalar 自动镜像到 wandb
         save_code=True,
         mode=WANDB_MODE,
         dir=filename,
@@ -147,12 +147,15 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
 
     #### 训练模型 #############################################
     # learning_rate=3e-4 为恒定 (constant LR), SB3 里传数字默认就是 constant.
+    # tensorboard_log: SB3 写 TB scalar 供 wandb sync_tensorboard 镜像, 不需要手动看 TB.
+    tb_dir = os.path.join(filename, 'tb')
     if resume is not None and os.path.isfile(resume):
         print(f'[INFO] resume 训练, 从 {resume} 加载模型 + optimizer state')
         model = PPO.load(
             resume,
             env=train_env,
             device='auto',
+            tensorboard_log=tb_dir,
             # 覆盖部分超参 (以防旧 ckpt 超参不合适)
             custom_objects={
                 'learning_rate': 3e-4,
@@ -160,10 +163,10 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                 'ent_coef': 0.005,
             },
         )
-        model.tensorboard_log = None
     else:
         model = PPO('MlpPolicy',
                     train_env,
+                    tensorboard_log=tb_dir,
                     learning_rate=3e-4,
                     n_steps=512,
                     batch_size=4096,
