@@ -359,41 +359,51 @@ class GlobalPlannerAviary(BaseRLAviary):
             target_wp = self.WAYPOINTS[self.wp_counters[i]]
             to_wp = target_wp - pos
             dist = np.linalg.norm(to_wp)
+            speed = float(np.linalg.norm(vel))
 
-            # 0) 距离 shaping (potential-based): 接近 waypoint 给正奖励
+            # 0) 距离 shaping (potential-based, clamped): 接近 waypoint 给正奖励.
             next_pos = pos + vel * self.CTRL_TIMESTEP
             next_dist = np.linalg.norm(target_wp - next_pos)
-            rewards[i] += (dist - next_dist) * 50.0
+            shaping = (dist - next_dist) * 10.0
+            shaping = float(np.clip(shaping, -0.05, 0.05))
+            rewards[i] += shaping
 
-            # 1) 每步存活的小负奖励, 鼓励尽快完成
-            rewards[i] += -0.01
+            # 1) 每步存活的负奖励 (加大: -0.01 -> -0.05, 防止 agent 静止刷分)
+            rewards[i] += -0.05
 
-            # 2) 到达 waypoint / 终点
+            # 2) 静止惩罚: 速度过低且离当前 waypoint 还远 -> 重罚
+            #    速度阈值 0.1 m/s 内视为"基本不动".
+            STATIC_SPEED = 0.1
+            if dist > self.ARRIVAL_RADIUS and speed < STATIC_SPEED:
+                # 越接近 0 越罚
+                rewards[i] += -0.5 * (STATIC_SPEED - speed) / STATIC_SPEED
+
+            # 3) tracking 奖励: 到达 waypoint / 终点 (中间 wp 提高: 10 -> 50)
             if dist < self.ARRIVAL_RADIUS:
                 if self.wp_counters[i] < self.num_waypoints - 1:
-                    rewards[i] += 20.0
+                    rewards[i] += 50.0
                     self.wp_counters[i] += 1
                 else:
-                    rewards[i] += 200.0  # 到达最终目标 (episode 也会 terminate)
+                    rewards[i] += 500.0  # 到达最终目标 (episode terminate)
 
-            # 3) 避障: 进入障碍体一次性重罚 (episode 会被 terminate); 接近时温和惩罚
+            # 4) 避障
             obs_threshold = 0.15
             d_obs = self._min_obs_distance(pos)
             if d_obs < 0.0:
                 rewards[i] -= 200.0
             elif d_obs < obs_threshold:
-                rewards[i] -= (obs_threshold - d_obs) * 20.0
+                rewards[i] -= (obs_threshold - d_obs) * 10.0
 
-            # 4) 越界一次性重罚 (episode 也会 terminate)
+            # 5) 越界一次性重罚
             (xr, yr, zr) = self.WORKSPACE
             if (pos[0] < xr[0] or pos[0] > xr[1]
                 or pos[1] < yr[0] or pos[1] > yr[1]
                 or pos[2] < zr[0] or pos[2] > zr[1]):
                 rewards[i] -= 100.0
 
-            # 5) 姿态正则 (温和)
+            # 6) 姿态正则 (温和)
             roll, pitch, yaw = state[7:10]
-            rewards[i] += -0.05 * (roll * roll + pitch * pitch) - 0.005 * yaw * yaw
+            rewards[i] += -0.02 * (roll * roll + pitch * pitch) - 0.002 * yaw * yaw
 
         return float(rewards.sum()) if self.NUM_DRONES == 1 else rewards
 

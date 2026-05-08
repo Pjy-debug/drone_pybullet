@@ -22,9 +22,11 @@ import gymnasium as gym
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+import wandb
+from wandb.integration.sb3 import WandbCallback
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold
+from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold, CheckpointCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 
 from utils.Logger import Logger
@@ -46,6 +48,11 @@ DEFAULT_OBS = ObservationType.KIN # 运动学观测
 DEFAULT_ACT = ActionType.PID    # 推荐使用速度控制 ('pid') 以实现更好的路径追踪
 DEFAULT_AGENTS = 1
 DEFAULT_MA = False
+
+# --- wandb ---
+WANDB_PROJECT = 'drone-rl-avoidance'
+WANDB_ENTITY = None     # 填你的 wandb entity (可选)
+WANDB_MODE = 'online'   # 'online' / 'offline' / 'disabled'
 
 # --- 简化场景: start / goal 在两个小球形区域内变化, 障碍生成在两点连线附近 ---
 START_CENTER   = (0.0, 0.0, 1.0)
@@ -84,12 +91,36 @@ class TqdmCallback(BaseCallback):
     def _on_training_end(self):
         self.pbar.close()
 
-def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO, local=True, timesteps=DEFAULT_TIMESTEPS):
+def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO, local=True, timesteps=DEFAULT_TIMESTEPS, resume=None):
 
     filename = os.path.join(output_folder, 'save-'+datetime.now().strftime("%m.%d.%Y_%H.%M.%S"))
     if not os.path.exists(filename):
         os.makedirs(filename+'/')
     print('filename is ', filename)
+
+    # --- wandb 初始化 ---
+    run_name = os.path.basename(filename)
+    wandb_config = dict(
+        algo='PPO',
+        timesteps=timesteps,
+        start_center=START_CENTER,
+        goal_center=GOAL_CENTER,
+        region_radius=REGION_RADIUS,
+        num_obstacles=NUM_OBSTACLES,
+        obs=str(DEFAULT_OBS),
+        act=str(DEFAULT_ACT),
+        n_envs=72,
+    )
+    wandb_run = wandb.init(
+        project=WANDB_PROJECT,
+        entity=WANDB_ENTITY,
+        name=run_name,
+        config=wandb_config,
+        sync_tensorboard=False,
+        save_code=True,
+        mode=WANDB_MODE,
+        dir=filename,
+    )
     # 封装环境初始化参数
     env_kwargs = dict(
         simple_scene=True,
@@ -115,19 +146,34 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     # print('[INFO] Observation space:', train_env.observation_space)
 
     #### 训练模型 #############################################
-    model = PPO('MlpPolicy',
-                train_env,
-                tensorboard_log=filename+'/tb/',
-                learning_rate=3e-4,
-                n_steps=512,
-                batch_size=1024,
-                n_epochs=10,
-                gamma=0.99,
-                gae_lambda=0.95,
-                clip_range=0.2,
-                ent_coef=0.0,
-                verbose=1,
-                device='auto')
+    # learning_rate=3e-4 为恒定 (constant LR), SB3 里传数字默认就是 constant.
+    if resume is not None and os.path.isfile(resume):
+        print(f'[INFO] resume 训练, 从 {resume} 加载模型 + optimizer state')
+        model = PPO.load(
+            resume,
+            env=train_env,
+            device='auto',
+            # 覆盖部分超参 (以防旧 ckpt 超参不合适)
+            custom_objects={
+                'learning_rate': 3e-4,
+                'clip_range': 0.2,
+                'ent_coef': 0.005,
+            },
+        )
+        model.tensorboard_log = None
+    else:
+        model = PPO('MlpPolicy',
+                    train_env,
+                    learning_rate=3e-4,
+                    n_steps=512,
+                    batch_size=4096,
+                    n_epochs=5,
+                    gamma=0.99,
+                    gae_lambda=0.95,
+                    clip_range=0.2,
+                    ent_coef=0.005,
+                    verbose=1,
+                    device='auto')
     #### 目标奖励阈值 (根据路径点数量调整) #######################
     # 路径追踪任务通常需要更长的时间，target_reward 需根据实际奖励曲线调整
     target_reward = 1000. if not multiagent else 2000.
@@ -147,9 +193,27 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     iteration_callback = IterationCounterCallback()
     total_timesteps = timesteps if local else int(1e4)
     tqdm_callback = TqdmCallback(total_timesteps)
+    wandb_callback = WandbCallback(
+        model_save_path=filename,
+        model_save_freq=20000,
+        gradient_save_freq=0,
+        verbose=2,
+    )
+    # 定期 checkpoint (包含 policy + optimizer state, 可用于续训)
+    ckpt_dir = os.path.join(filename, 'ckpt')
+    os.makedirs(ckpt_dir, exist_ok=True)
+    checkpoint_callback = CheckpointCallback(
+        save_freq=max(50000 // 72, 1),  # 按总步数 ~50k 存一次
+        save_path=ckpt_dir,
+        name_prefix='ppo_ckpt',
+        save_replay_buffer=False,        # PPO 是 on-policy, 无 replay buffer
+        save_vecnormalize=False,
+    )
     model.learn(total_timesteps=total_timesteps,
-                callback=[eval_callback, iteration_callback, tqdm_callback],
-                log_interval=10)
+                callback=[eval_callback, iteration_callback, tqdm_callback,
+                          wandb_callback, checkpoint_callback],
+                log_interval=10,
+                reset_num_timesteps=(resume is None))
 
     #### 保存模型 #############################################
     model.save(filename+'/final_model.zip')
@@ -231,6 +295,12 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     logger.save_as_csv()
     logger.save()
 
+    # 关闭 wandb
+    try:
+        wandb_run.finish()
+    except Exception:
+        pass
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Reinforcement Learning with Global Planning')
     parser.add_argument('--multiagent',         default=DEFAULT_MA,            type=str2bool)
@@ -238,6 +308,8 @@ if __name__ == '__main__':
     parser.add_argument('--record_video',       default=DEFAULT_RECORD_VIDEO,  type=str2bool)
     parser.add_argument('--output_folder',      default=DEFAULT_OUTPUT_FOLDER, type=str)
     parser.add_argument('--timesteps',          default=DEFAULT_TIMESTEPS,     type=int)
+    parser.add_argument('--resume',             default=None,                  type=str,
+                        help='从已保存的 .zip 模型续训 (包含 policy + optimizer state)')
     ARGS = parser.parse_args()
 
     run(**vars(ARGS))
