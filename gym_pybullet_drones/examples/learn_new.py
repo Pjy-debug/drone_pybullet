@@ -38,7 +38,7 @@ from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, Obs
 from tqdm import tqdm
 
 # --- 默认参数配置 ---
-DEFAULT_GUI = False           # 训练时关闭 GUI (快很多); 测试阶段自动打开
+DEFAULT_GUI = False      # 训练时关闭 GUI (快很多); 测试阶段自动打开
 DEFAULT_RECORD_VIDEO = False
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
@@ -168,7 +168,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                     train_env,
                     tensorboard_log=tb_dir,
                     learning_rate=3e-4,
-                    n_steps=512,
+                    n_steps=256,
                     batch_size=4096,
                     n_epochs=5,
                     gamma=0.99,
@@ -215,7 +215,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     model.learn(total_timesteps=total_timesteps,
                 callback=[eval_callback, iteration_callback, tqdm_callback,
                           wandb_callback, checkpoint_callback],
-                log_interval=10,
+                log_interval=2,
                 reset_num_timesteps=(resume is None))
 
     #### 保存模型 #############################################

@@ -97,7 +97,16 @@ class SceneGenerator:
             perp_offset_max: 障碍中心在垂直于连线方向上的最大扰动 (越小越容易挡住路径).
             clearance: 障碍表面与 start / goal 的最小间隙.
         """
-        start = self._sample_in_ball(start_center, region_radius)
+        offset_xy = np.random.uniform(
+            -region_radius,
+            region_radius,
+            size=2
+        )
+        start = np.array([
+            start_center[0] + offset_xy[0],
+            start_center[1] + offset_xy[1],
+            0.0
+        ])
         goal = self._sample_in_ball(goal_center, region_radius)
 
         line_vec = goal - start
