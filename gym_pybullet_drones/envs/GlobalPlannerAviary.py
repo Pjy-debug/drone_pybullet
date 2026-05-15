@@ -40,7 +40,7 @@ class GlobalPlannerAviary(BaseRLAviary):
                  goal: np.ndarray = np.array([3.5, 0.0, 1.2]),
                  obstacles=None,
                  waypoint_spacing: float = 0.6,
-                 arrival_radius: float = 0.15,
+                 arrival_radius: float = 0.1,
                  workspace_bounds=((-1.0, 5.0), (-3.0, 3.0), (-0.1, 2.5)),
                  act_scale: float = None,   # 预留, 当前未使用
                  collision_penalty: float = 50.0,
@@ -360,51 +360,73 @@ class GlobalPlannerAviary(BaseRLAviary):
             to_wp = target_wp - pos
             dist = np.linalg.norm(to_wp)
             speed = float(np.linalg.norm(vel))
+            vel_dir = vel / (speed + 1e-8)
+            dir_wp = to_wp / (dist + 1e-8)
 
-            # 0) 距离 shaping (potential-based, clamped): 接近 waypoint 给正奖励.
+            # 0) 距离奖励
             next_pos = pos + vel * self.CTRL_TIMESTEP
             next_dist = np.linalg.norm(target_wp - next_pos)
-            shaping = (dist - next_dist) * 10.0
-            shaping = float(np.clip(shaping, -0.05, 0.05))
-            rewards[i] += shaping
+            rewards[i] += -1 * (next_dist - dist)*500
+            if IS_DEBUG:
+                print('距离奖励：', -1* (next_dist - dist)*500)
 
-            # 1) 每步存活的负奖励 (加大: -0.01 -> -0.05, 防止 agent 静止刷分)
-            rewards[i] += -0.05
+            # 1) 朝向 waypoint 的速度投影奖励
+            rewards[i] += float(np.dot(vel_dir, dir_wp)) * speed
+            if IS_DEBUG:
+                print('朝向奖励：', float(np.dot(vel_dir, dir_wp)) * speed)
 
-            # 2) 静止惩罚: 速度过低且离当前 waypoint 还远 -> 重罚
-            #    速度阈值 0.1 m/s 内视为"基本不动".
-            STATIC_SPEED = 0.1
-            if dist > self.ARRIVAL_RADIUS and speed < STATIC_SPEED:
-                # 越接近 0 越罚
-                rewards[i] += -0.5 * (STATIC_SPEED - speed) / STATIC_SPEED
+            # 2) 高度(禁用)
+            # rewards[i] += -(pos[2] - target_wp[2])**2 * 2.5
+            # if IS_DEBUG:
+            #     print('高度奖励：', -(pos[2] - target_wp[2])**2 * 2.5)
 
-            # 3) tracking 奖励: 到达 waypoint / 终点 (中间 wp 提高: 10 -> 50)
+            # 3) 到达 waypoint 奖励
             if dist < self.ARRIVAL_RADIUS:
                 if self.wp_counters[i] < self.num_waypoints - 1:
                     rewards[i] += 50.0
                     self.wp_counters[i] += 1
+                    print('到达 waypoint 奖励：10.0, 下一个目标：wp%d' % self.wp_counters[i], 'wp位置：', target_wp)
                 else:
-                    rewards[i] += 500.0  # 到达最终目标 (episode terminate)
+                    rewards[i] += 500.0
+                    print('到达最终目标奖励：100.0')
 
-            # 4) 避障
-            obs_threshold = 0.15
+            # 4) 避障惩罚: 离最近障碍越近罚越多, 进入障碍体则大额惩罚
+            obs_threshold = 0.2
             d_obs = self._min_obs_distance(pos)
             if d_obs < 0.0:
-                rewards[i] -= 200.0
+                rewards[i] -= self.COLLISION_PENALTY
             elif d_obs < obs_threshold:
-                rewards[i] -= (obs_threshold - d_obs) * 10.0
+                rewards[i] -= (obs_threshold - d_obs) * 100.0
+            if IS_DEBUG:
+                print('避障惩罚：', -self.COLLISION_PENALTY if d_obs < 0.0 else (- (obs_threshold - d_obs) * 100.0 if d_obs < obs_threshold else 0.0))
 
-            # 5) 越界一次性重罚
+            # 5) 坠地 / 飞出边界的软惩罚
             (xr, yr, zr) = self.WORKSPACE
             if (pos[0] < xr[0] or pos[0] > xr[1]
                 or pos[1] < yr[0] or pos[1] > yr[1]
                 or pos[2] < zr[0] or pos[2] > zr[1]):
-                rewards[i] -= 100.0
+                rewards[i] -= 5.0
+            if IS_DEBUG:
+                print('边界惩罚：', -5.0 if (pos[0] < xr[0] or pos[0] > xr[1]
+                    or pos[1] < yr[0] or pos[1] > yr[1]
+                    or pos[2] < zr[0] or pos[2] > zr[1]) else 0.0)
+                
+            # 5.1) 反转惩罚
+            q = state[3:7]
+            if 1 - 2*(q[1]**2 + q[2]**2) < 0.0:  # roll 超过 90 度
+                rewards[i] -= 5.0
+            if IS_DEBUG:
+                print('反转惩罚：', -5.0 if 1 - 2*(q[1]**2 + q[2]**2) < 0.0 else 0.0)
 
-            # 6) 姿态正则 (温和)
-            roll, pitch, yaw = state[7:10]
-            rewards[i] += -0.02 * (roll * roll + pitch * pitch) - 0.002 * yaw * yaw
+            # 6) 角度惩罚
+            row, pitch, yaw = state[7:10]
+            rewards[i]+=-1*(1.0 * row**2 + 1.0 * pitch**2 + 0.1 * yaw**2)
+            if IS_DEBUG:
+                print(f'角度惩罚：{-1*(1.0 * row**2 + 1.0 * pitch**2 + 0.1 * yaw**2)}')
 
+            if IS_DEBUG:
+                print(f"drone{i} dist={dist:.2f} d_obs={d_obs:.2f} "
+                      f"wp={self.wp_counters[i]} wp_pos={target_wp} r={rewards[i]:.2f}")
         return float(rewards.sum()) if self.NUM_DRONES == 1 else rewards
 
     # ---- termination --------------------------------------------------------
@@ -421,6 +443,10 @@ class GlobalPlannerAviary(BaseRLAviary):
             if (pos[0] < xr[0] or pos[0] > xr[1]
                 or pos[1] < yr[0] or pos[1] > yr[1]
                 or pos[2] < zr[0] or pos[2] > zr[1]):
+                return True
+            # 反转
+            q = state[3:7]
+            if 1 - 2*(q[1]**2 + q[2]**2) < 0.0:  # roll 超过 90 度
                 return True
         # 到达最终目标
         done_all = True

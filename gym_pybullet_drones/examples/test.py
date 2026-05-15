@@ -19,7 +19,7 @@ from utils.Logger import Logger
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 
 # --- 配置参数 (需与训练时保持一致) ---
-MODEL_PATH = "D:\homework\Grade3_2\drone\gym-pybullet-drones-main\gym_pybullet_drones\\results\save-05.06.2026_03.03.24\\best_model.zip"
+MODEL_PATH = "D:\homework\Grade3_2\drone\gym-pybullet-drones-main\\results\save-05.15.2026_05.12.29\\best_model.zip"
 GUI = True              # 测试时建议打开可视化
 RECORD_VIDEO = False
 NUM_EPISODES = 300        # 测试的回合数
