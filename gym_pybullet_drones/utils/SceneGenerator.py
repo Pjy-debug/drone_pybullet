@@ -29,7 +29,7 @@ class SceneGenerator:
         start = np.array([
             random.uniform(self.x_range[0] + 0.5, self.x_range[0] + 1.5),
             random.uniform(self.y_range[0] + 0.5, self.y_range[1] - 0.5),
-            0.0
+            0.0135
         ])
 
         # 2. 生成终点 (确保距离起点足够远)
@@ -105,7 +105,7 @@ class SceneGenerator:
         start = np.array([
             start_center[0] + offset_xy[0],
             start_center[1] + offset_xy[1],
-            0.0
+            0.0135
         ])
         goal = self._sample_in_ball(goal_center, region_radius)
 
