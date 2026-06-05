@@ -19,7 +19,7 @@ from utils.Logger import Logger
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 
 # --- 配置参数 (需与训练时保持一致) ---
-MODEL_PATH = "D:\homework\Grade3_2\drone\gym-pybullet-drones-main\\results\save-05.22.2026_15.43.47\\best_model.zip"
+MODEL_PATH = "D:\homework\Grade3_2\drone\gym-pybullet-drones-main\\results\save-06.05.2026_02.51.12\\model.zip"
 GUI = True              # 测试时建议打开可视化
 RECORD_VIDEO = True
 NUM_EPISODES = 300        # 测试的回合数
@@ -42,9 +42,11 @@ def test():
         goal=CUSTOM_GOAL,
         obstacles=CUSTOM_OBSTACLES,
         obs=ObservationType.KIN,
-        act=ActionType.PID,
+        act = ActionType.RPM,
         record=RECORD_VIDEO,
-        IS_DEBUG=True
+        IS_DEBUG=True,
+        task="easy",
+        mode = "testing",
     )
 
     #### 2. 加载训练好的模型 #######################################
@@ -54,7 +56,7 @@ def test():
 
     model = PPO.load(MODEL_PATH)
     print(f"[INFO] 成功加载模型: {MODEL_PATH}")
-
+    print(model.policy)
     #### 3. 初始化数据记录器 #######################################
     logger = Logger(
         logging_freq_hz=int(test_env.CTRL_FREQ),
@@ -64,6 +66,20 @@ def test():
     #### 4. 执行测试循环 ###########################################
     for episode in range(NUM_EPISODES):
         obs, info = test_env.reset()
+        
+        # see miu and sigma
+        obs_tensor = torch.as_tensor(obs).float().unsqueeze(0)
+        with torch.no_grad():
+            dist = model.policy.get_distribution(obs_tensor)
+        
+            mu = dist.distribution.mean
+            sigma = dist.distribution.stddev
+        
+        print("mu =", mu)
+        print("sigma =", sigma)
+
+
+
         start_time = time.time()
         episode_reward = 0
         done = False

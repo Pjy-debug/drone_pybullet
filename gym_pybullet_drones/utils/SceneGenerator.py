@@ -22,6 +22,7 @@ class SceneGenerator:
         return (self.x_range, self.y_range, self.z_range)
 
     def generate_scene(self, num_obstacles=3):
+        print('using this!!!')
         """
         随机生成一套完整的场景配置
         """
@@ -75,47 +76,158 @@ class SceneGenerator:
             offset = np.random.uniform(-radius, radius, size=3)
             if np.linalg.norm(offset) <= radius:
                 return center + offset
-
-    def generate_scene_on_line(self,
-                               start_center=(0.0, 0.0, 1.0),
-                               goal_center=(3.5, 0.0, 1.0),
-                               region_radius=0.3,
-                               num_obstacles=2,
-                               obs_radius_range=(0.25, 0.4),
-                               t_range=(0.25, 0.75),
-                               perp_offset_max=0.15,
-                               clearance=0.15):
-        """简化任务: start / goal 在两个小球形区域内变化, 障碍物生成在 start-goal 连线附近.
-
-        Args:
-            start_center, goal_center: 起点 / 终点的中心位置.
-            region_radius: 起点 / 终点扰动的球半径 (越小任务越简单).
-            num_obstacles: 障碍数量.
-            obs_radius_range: 障碍球半径采样区间.
-            t_range: 障碍中心沿连线的参数化位置范围 t∈[0,1] (0=start, 1=goal).
-                避开两端, 默认 [0.25, 0.75].
-            perp_offset_max: 障碍中心在垂直于连线方向上的最大扰动 (越小越容易挡住路径).
-            clearance: 障碍表面与 start / goal 的最小间隙.
+    
+    def generate_takeoff(
+        self,
+        start_center=(2.0, 0.0),
+        hover_height_range=(0.5, 1.5)):
         """
+        起飞 -> 悬停
+        """
+    
+        start = np.array([
+            start_center[0] + np.random.uniform(-0.5, 0.5),
+            start_center[1] + np.random.uniform(-0.5, 0.5),
+            0.0135
+        ])
+    
+        goal = np.array([
+            start[0] + np.random.uniform(-2.0,2.0),
+            start[1] + np.random.uniform(-2.0, 2.0),
+            np.random.uniform(*hover_height_range)
+        ])
+    
+        obstacles = []
+    
+        return start, goal, obstacles
+
+    def generate_short_distance(
+        self,
+        start_center=(2.0, 0.0),
+        distance_range=(1.5, 3.5)):
+        """
+        短距离导航
+        """
+    
+        start = np.array([
+            start_center[0] + np.random.uniform(-0.2, 0.2),
+            start_center[1] + np.random.uniform(-0.2, 0.2),
+            0.0135
+        ])
+    
+        yaw = np.random.uniform(-np.pi, np.pi)
+    
+        dist = np.random.uniform(*distance_range)
+    
+        goal = start + np.array([
+            dist * np.cos(yaw),
+            dist * np.sin(yaw),
+            np.random.uniform(0.5, 1.0)
+        ])
+    
+        goal[0] = np.clip(goal[0], -0.5, 4.5)
+        goal[1] = np.clip(goal[1], -2.5, 2.5)
+        goal[2] = np.clip(goal[2], 0.5, 2.0)
+    
+        return start, goal, []
+
+    def generate_scene_on_line(
+            self,
+            start_center=(0.0, 0.0, 1.0),
+            nominal_goal_distance=3.5,
+            direction_angle_range=np.deg2rad(35),   # 最大偏转角
+            vertical_angle_range=np.deg2rad(15),    # z方向轻微扰动
+            region_radius=0.3,
+            num_obstacles=2,
+            obs_radius_range=(0.25, 0.4),
+            t_range=(0.25, 0.75),
+            perp_offset_max=0.05,
+            clearance=0.15):
+    
+        """
+        改进版:
+            - start 在小区域随机
+            - goal 不再固定在 +x
+            - 而是在“主方向附近”随机偏转
+            - 难度温和增加
+        """
+    
+        # -------------------------------------------------
+        # 1. start 随机
+        # -------------------------------------------------
+    
         offset_xy = np.random.uniform(
             -region_radius,
             region_radius,
             size=2
         )
+    
         start = np.array([
             start_center[0] + offset_xy[0],
             start_center[1] + offset_xy[1],
             0.0135
         ])
-        goal = self._sample_in_ball(goal_center, region_radius)
-
+    
+        # -------------------------------------------------
+        # 2. goal 方向轻微随机化
+        # -------------------------------------------------
+    
+        # 水平偏转角
+        yaw = np.random.uniform(
+            -direction_angle_range,
+            direction_angle_range
+        )
+    
+        # 垂直偏转角
+        pitch = np.random.uniform(
+            -vertical_angle_range,
+            vertical_angle_range
+        )
+    
+        # 距离也稍微随机
+        dist = np.random.uniform(
+            nominal_goal_distance - 0.5,
+            nominal_goal_distance + 0.5
+        )
+    
+        # 球坐标 -> 笛卡尔
+        direction = np.array([
+            np.cos(pitch) * np.cos(yaw),
+            np.cos(pitch) * np.sin(yaw),
+            np.sin(pitch)
+        ])
+    
+        goal = start + direction * dist
+    
+        # -------------------------------------------------
+        # 3. goal 边界裁剪
+        # -------------------------------------------------
+    
+        goal[0] = np.clip(goal[0],
+                          self.x_range[0] + 0.5,
+                          self.x_range[1] - 0.5)
+    
+        goal[1] = np.clip(goal[1],
+                          self.y_range[0] + 0.5,
+                          self.y_range[1] - 0.5)
+    
+        goal[2] = np.clip(goal[2],
+                          self.z_range[0] + 0.5,
+                          self.z_range[1] - 0.5)
+    
+        # -------------------------------------------------
+        # 4. 连线方向
+        # -------------------------------------------------
+    
         line_vec = goal - start
         line_len = np.linalg.norm(line_vec)
+    
         if line_len < 1e-6:
-            # 极端兜底: start ≈ goal, 直接退化为不带障碍的场景
             return start, goal, []
+    
         line_dir = line_vec / line_len
-
+    
+        # -------------------------------------------------
         # 构造一组与 line_dir 正交的基 (e1, e2)
         helper = np.array([0.0, 0.0, 1.0]) if abs(line_dir[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
         e1 = np.cross(line_dir, helper)
@@ -158,5 +270,6 @@ class SceneGenerator:
                 continue
 
             obstacles.append((obs_pos, obs_radius))
-
         return start, goal, obstacles
+    
+    
