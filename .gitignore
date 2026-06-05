@@ -436,3 +436,5 @@ TSWLatexianTemp*
 
 # wandb result
 wandb/
+
+episode_logs/
