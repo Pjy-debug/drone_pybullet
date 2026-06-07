@@ -55,6 +55,25 @@ class GlobalPlannerAviary(BaseRLAviary):
                  task: str = "global",
                  mode = "training",
                  **kwargs):
+        self.collective_min = 11979.080
+        self.collective_max = 21609.838
+        self.collective_mean = (self.collective_min + self.collective_max) / 2
+        self.collective_scale = (self.collective_max - self.collective_min)/2
+        self.roll_scale = 253.098
+        self.pitch_scale = 308.259
+        self.yaw_scale = 38.606
+
+        self.p2 = np.array([
+            -0.499261749, -0.411203339, 0.043740945, -0.129296274, -0.167064789,
+            -0.015993111, 0.035196168, -0.39194859, -0.014418677, -0.917092628,
+            -2.51012368, -0.316268515, 0.039115462, -0.199225552, -0.000141473
+        ], dtype=np.float32)
+        self.p98 = np.array([
+            4.45200696, -0.00077445, 1.052802312, 0.163919964, 0.434857368,
+            0.073620218, 1.332311176, 0.434653471, 0.77478196, 0.999082896,
+            2.87799616, 0.281478268, 0.702801004, 0.261309359, 0.361056873
+        ], dtype=np.float32)
+
         self.mode = mode
 
         self.task = task
@@ -98,7 +117,7 @@ class GlobalPlannerAviary(BaseRLAviary):
 
         # 可视化 id 记录
         self._dbg_item_ids = []
-        if self.GUI:
+        if self.GUI or self.RECORD:
             self._draw_planning_scene()
 
         self._reset_episode_metrics()
@@ -300,6 +319,8 @@ class GlobalPlannerAviary(BaseRLAviary):
         (xr, yr, zr) = workspace_bounds
         scene_gen = SceneGenerator(x_range=xr, y_range=yr, z_range=zr)
         if self._simple_scene:
+            if self.task == 'fix':
+                return scene_gen.generate_fix()
             if self.task == 'easy':
                 return scene_gen.generate_takeoff()
             elif self.task == 'short':
@@ -349,7 +370,7 @@ class GlobalPlannerAviary(BaseRLAviary):
 
     def _draw_planning_scene(self):
         """GUI 中绘制起点 / 终点 / waypoints / A* 路径."""
-        # 起点 (绿色十字 + 文字)
+        # 起点 (绿色十字 + 文字 - 调试元素)
         s = self.START
         p.addUserDebugLine(s + [0.15, 0, 0], s - [0.15, 0, 0],
                            lineColorRGB=[0, 1, 0], lineWidth=2,
@@ -360,7 +381,21 @@ class GlobalPlannerAviary(BaseRLAviary):
         p.addUserDebugText("START", s + [0, 0, 0.25], textColorRGB=[0, 1, 0],
                            textSize=1.2, physicsClientId=self.CLIENT)
 
-        # 终点 (蓝色十字 + 文字)
+        # 起点 - 绿色球体（可被录制）
+        start_vis = p.createVisualShape(
+            shapeType=p.GEOM_SPHERE,
+            radius=0.01,
+            rgbaColor=[0, 1, 0, 0.7],  # 绿色
+            physicsClientId=self.CLIENT
+        )
+        p.createMultiBody(
+            baseMass=0,
+            baseVisualShapeIndex=start_vis,
+            basePosition=list(s),
+            physicsClientId=self.CLIENT
+        )
+
+        # 终点 (蓝色十字 + 文字 - 调试元素)
         g = self.GOAL
         p.addUserDebugLine(g + [0.15, 0, 0], g - [0.15, 0, 0],
                            lineColorRGB=[0, 0, 1], lineWidth=2,
@@ -371,14 +406,54 @@ class GlobalPlannerAviary(BaseRLAviary):
         p.addUserDebugText("GOAL", g + [0, 0, 0.25], textColorRGB=[0, 0, 1],
                            textSize=1.5, physicsClientId=self.CLIENT)
 
-        # 连 waypoints 的折线
+        # 终点 - 蓝色球体（可被录制）
+        goal_vis = p.createVisualShape(
+            shapeType=p.GEOM_SPHERE,
+            radius=0.01,
+            rgbaColor=[0, 0, 1, 0.7],  # 蓝色
+            physicsClientId=self.CLIENT
+        )
+        p.createMultiBody(
+            baseMass=0,
+            baseVisualShapeIndex=goal_vis,
+            basePosition=list(g),
+            physicsClientId=self.CLIENT
+        )
+
+        # 连 waypoints 的折线（调试元素）
         path_pts = np.vstack([self.START, self.WAYPOINTS])
         for i in range(len(path_pts) - 1):
             p.addUserDebugLine(path_pts[i], path_pts[i + 1],
                                lineColorRGB=[1, 1, 0], lineWidth=1.5,
                                physicsClientId=self.CLIENT)
 
-        # 每个 waypoint 画小黄十字
+        # 路径 - 沿路径放置小黄球（可被录制）
+        for i in range(len(path_pts) - 1):
+            pt1 = path_pts[i]
+            pt2 = path_pts[i + 1]
+            diff = pt2 - pt1
+            distance = np.linalg.norm(diff)
+            # 沿路径每0.1m放一个小球
+            if distance > 0:
+                direction = diff / distance
+                num_points = max(2, int(distance / 0.1) + 1)
+                for j in range(num_points):
+                    t = j / (num_points - 1) if num_points > 1 else 0.5
+                    point = pt1 + t * diff
+                    path_vis = p.createVisualShape(
+                        shapeType=p.GEOM_SPHERE,
+                        radius=0.015,
+                        rgbaColor=[1, 1, 0, 0.6],  # 黄色
+                        physicsClientId=self.CLIENT
+                    )
+                    p.createMultiBody(
+                        baseMass=0,
+                        baseVisualShapeIndex=path_vis,
+                        basePosition=list(point),
+                        physicsClientId=self.CLIENT
+                    )
+
+        # 每个 waypoint 画小黄十字（调试元素）
         for i, wp in enumerate(self.WAYPOINTS):
             p.addUserDebugLine(wp + [0.08, 0, 0], wp - [0.08, 0, 0],
                                lineColorRGB=[1, 1, 0], lineWidth=1,
@@ -389,6 +464,20 @@ class GlobalPlannerAviary(BaseRLAviary):
             p.addUserDebugText(f"wp{i}", wp + [0, 0, 0.08],
                                textColorRGB=[1, 1, 0], textSize=0.8,
                                physicsClientId=self.CLIENT)
+
+            # Waypoint - 黄色球体（可被录制）
+            wp_vis = p.createVisualShape(
+                shapeType=p.GEOM_SPHERE,
+                radius=0.05,
+                rgbaColor=[1, 1, 0, 0.7],  # 黄色
+                physicsClientId=self.CLIENT
+            )
+            p.createMultiBody(
+                baseMass=0,
+                baseVisualShapeIndex=wp_vis,
+                basePosition=list(wp),
+                physicsClientId=self.CLIENT
+            )
         
         # print('wps:\n', self.WAYPOINTS)
 
@@ -441,10 +530,11 @@ class GlobalPlannerAviary(BaseRLAviary):
         self.num_waypoints = self.WAYPOINTS.shape[0]
         self.wp_counters = np.zeros(self.NUM_DRONES, dtype=int)
         obs, info = super().reset(seed=seed, options=options)
-        if self.GUI:
+        if self.GUI or self.RECORD:
             self._draw_planning_scene()
 
-        self._reset_episode_metrics()
+        if self.mode == "testing":
+            self._reset_episode_metrics()
         return obs, info
 
     def _actionSpace(self):
@@ -490,46 +580,39 @@ class GlobalPlannerAviary(BaseRLAviary):
                 state = self._getDroneStateVector(k)
                 action_asarray = np.asarray(action[k, :], dtype=float)
                 # cal rpm_k
-                collective_min = 11979.080
-                collective_max = 21609.838
-                collective_mean = (collective_min + collective_max) / 2
-                collective_scale = (collective_max - collective_min)/2
-                roll_scale = 253.098
-                pitch_scale = 308.259
-                yaw_scale = 38.606
+                
 
                 rpm_k = np.zeros(4)
-                rpm_k[0] = collective_mean + action_asarray[0] * collective_scale - action_asarray[1] * roll_scale - action_asarray[2] * pitch_scale - action_asarray[3] * yaw_scale
-                rpm_k[1] = collective_mean + action_asarray[0] * collective_scale - action_asarray[1] * roll_scale + action_asarray[2] * pitch_scale + action_asarray[3] * yaw_scale
-                rpm_k[2] = collective_mean + action_asarray[0] * collective_scale + action_asarray[1] * roll_scale + action_asarray[2] * pitch_scale - action_asarray[3] * yaw_scale
-                rpm_k[3] = collective_mean + action_asarray[0] * collective_scale + action_asarray[1] * roll_scale - action_asarray[2] * pitch_scale + action_asarray[3] * yaw_scale
+                rpm_k[0] = self.collective_mean + action_asarray[0] * self.collective_scale - action_asarray[1] * self.roll_scale - action_asarray[2] * self.pitch_scale - action_asarray[3] * self.yaw_scale
+                rpm_k[1] = self.collective_mean + action_asarray[0] * self.collective_scale - action_asarray[1] * self.roll_scale + action_asarray[2] * self.pitch_scale + action_asarray[3] * self.yaw_scale
+                rpm_k[2] = self.collective_mean + action_asarray[0] * self.collective_scale + action_asarray[1] * self.roll_scale + action_asarray[2] * self.pitch_scale - action_asarray[3] * self.yaw_scale
+                rpm_k[3] = self.collective_mean + action_asarray[0] * self.collective_scale + action_asarray[1] * self.roll_scale - action_asarray[2] * self.pitch_scale + action_asarray[3] * self.yaw_scale
                 if self.IS_DEBUG:
                     print(f'action_asarray: {action_asarray}, rpm: {rpm_k}')
 
                 # 直接使用PID指导，实现BC
-                target_wp = self.WAYPOINTS[self.wp_counters[k]]
-                expert_rpm_k, _, _ = self.ctrl[k].computeControl(
-                    control_timestep=self.CTRL_TIMESTEP,
-                    cur_pos=state[0:3],
-                    cur_quat=state[3:7],
-                    cur_vel=state[10:13],
-                    cur_ang_vel=state[13:16],
-                    target_pos=target_wp,
-                )
-                # 记录专家action
-                
-                self.expert_crpy[k, :] = np.zeros(4) 
-                self.expert_crpy[k, 0] = (expert_rpm_k[0] + expert_rpm_k[1] + expert_rpm_k[2] + expert_rpm_k[3]) / 4  # collective
-                self.expert_crpy[k, 1] = (-expert_rpm_k[0] - expert_rpm_k[1] + expert_rpm_k[2] + expert_rpm_k[3]) / 4  # roll
-                self.expert_crpy[k, 2] = (-expert_rpm_k[0] + expert_rpm_k[1] + expert_rpm_k[2] - expert_rpm_k[3]) / 4  # pitch
-                self.expert_crpy[k, 3] = (-expert_rpm_k[0] + expert_rpm_k[1] - expert_rpm_k[2] + expert_rpm_k[3]) / 4  # yaw
-                self.expert_crpy[k, 0] = (self.expert_crpy[k, 0]-collective_min)/collective_scale
-                self.expert_crpy[k, 1] = (self.expert_crpy[k, 1]+roll_scale)/(2*roll_scale)
-                self.expert_crpy[k, 2] = (self.expert_crpy[k, 2]+pitch_scale)/(2*pitch_scale)
-                self.expert_crpy[k, 3] = (self.expert_crpy[k, 3]+yaw_scale)/(2*yaw_scale)
-
-                self.model_crpy[k, :] = (action_asarray+1.0)/2.0
-                rpm[k, :] = 0.4 * rpm_k + 0.6 * expert_rpm_k  # 混合专家和模型输出, 逐渐过渡到完全使用模型输出
+                # target_wp = self.WAYPOINTS[self.wp_counters[k]]
+                # expert_rpm_k, _, _ = self.ctrl[k].computeControl(
+                #     control_timestep=self.CTRL_TIMESTEP,
+                #     cur_pos=state[0:3],
+                #     cur_quat=state[3:7],
+                #     cur_vel=state[10:13],
+                #     cur_ang_vel=state[13:16],
+                #     target_pos=target_wp,
+                # )
+                # # 记录专家action
+                # 
+                # self.expert_crpy[k, :] = np.zeros(4) 
+                # self.expert_crpy[k, 0] = (expert_rpm_k[0] + expert_rpm_k[1] + expert_rpm_k[2] + expert_rpm_k[3]) / 4  # collective
+                # self.expert_crpy[k, 1] = (-expert_rpm_k[0] - expert_rpm_k[1] + expert_rpm_k[2] + expert_rpm_k[3]) / 4  # roll
+                # self.expert_crpy[k, 2] = (-expert_rpm_k[0] + expert_rpm_k[1] + expert_rpm_k[2] - expert_rpm_k[3]) / 4  # pitch
+                # self.expert_crpy[k, 3] = (-expert_rpm_k[0] + expert_rpm_k[1] - expert_rpm_k[2] + expert_rpm_k[3]) / 4  # yaw
+                # self.expert_crpy[k, 0] = (self.expert_crpy[k, 0]-self.collective_min)/self.collective_scale
+                # self.expert_crpy[k, 1] = (self.expert_crpy[k, 1]+self.roll_scale)/(2*self.roll_scale)
+                # self.expert_crpy[k, 2] = (self.expert_crpy[k, 2]+self.pitch_scale)/(2*self.pitch_scale)
+                # self.expert_crpy[k, 3] = (self.expert_crpy[k, 3]+self.yaw_scale)/(2*self.yaw_scale)
+                # self.model_crpy[k, :] = (action_asarray+1.0)/2.0
+                rpm[k, :] = 1.0 * rpm_k
                 self.rpm = rpm[k, :]
 
                 if self.IS_DEBUG:
@@ -665,13 +748,14 @@ class GlobalPlannerAviary(BaseRLAviary):
         obs, reward, terminated, truncated, info = \
             super().step(action)
     
-        self._update_episode_metrics()
+        if self.mode == "testing":
+            self._update_episode_metrics()
     
         done = terminated or truncated
     
         if done:
-            self._finalize_episode_metrics()
             if self.mode == "testing":
+                self._finalize_episode_metrics()
                 self._save_episode_metrics()
     
         return obs, reward, terminated, truncated, info
@@ -698,7 +782,47 @@ class GlobalPlannerAviary(BaseRLAviary):
             target_info[i, :] = cur_wp - state[0:3]
         if self.IS_DEBUG:
             print(f'for drone{i}, final_obs: {np.hstack([root_obs, target_info]).astype(np.float32)}')
-        return np.hstack([root_obs, target_info]).astype(np.float32)
+        obs_unclipped = np.hstack([root_obs, target_info]).astype(np.float32)
+
+        # percentile clip (p2/p98) -> map to [-1, 1]
+        # 每维的 p2, p98 （来自 obs_stats）
+        
+
+        # 确保 obs_unclipped 的最后一维与 p2/p98 长度一致
+        feat_dim = obs_unclipped.shape[-1]
+        if feat_dim != self.p2.shape[0]:
+            # 维度不匹配时退回不缩放输出
+            if self.IS_DEBUG:
+                print(f"[GlobalPlannerAviary] obs dim {feat_dim} != scaler dim {p2.shape[0]}, skipping scaling")
+            final_obs = obs_unclipped
+        else:
+            a = self.p2.reshape((1, -1))
+            b = self.p98.reshape((1, -1))
+            denom = (b - a)
+            denom[denom == 0.0] = 1.0  # 防止除零（若b==a, 会把结果设为 0）
+
+            clipped = np.minimum(np.maximum(obs_unclipped, a), b)
+            norm01 = (clipped - a) / denom  # [0,1]
+            final_obs = norm01 * 2.0 - 1.0  # 映射到 [-1,1]
+        if self.IS_DEBUG:
+            # 记录并返回 final_obs
+            self.log_obs(final_obs[0], "test_logs/obs_clipped_log_"+self.start_time+".csv")
+        return final_obs.astype(np.float32)
+
+    def log_obs(self, obs, file_path):
+
+        if not os.path.exists("test_logs"):
+            os.makedirs("test_logs")
+        file_exists = os.path.exists(file_path)
+        with open(file_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            # 第一次写表头
+            if not file_exists:
+                writer.writerow([
+                    "obs0", "obs1", "obs2", "obs3", "obs4", "obs5", "obs6", "obs7", "obs8",
+                    "obs9", "obs10", "obs11", "obs12", "obs13", "obs14"
+                ])
+            writer.writerow([obs[0], obs[1], obs[2], obs[3], obs[4], obs[5], obs[6], obs[7], obs[8], obs[9], obs[10], obs[11], obs[12], obs[13], obs[14]])
 
     # ---- reward -------------------------------------------------------------
 
@@ -745,6 +869,8 @@ class GlobalPlannerAviary(BaseRLAviary):
         rewards = np.zeros(self.NUM_DRONES)
         for i in range(self.NUM_DRONES):
             state = self._getDroneStateVector(i)
+            if self.IS_DEBUG:
+                print('当前state: ', state)
             pos = state[0:3]
             vel = state[10:13]
             target_wp = self.WAYPOINTS[self.wp_counters[i]]
@@ -758,15 +884,17 @@ class GlobalPlannerAviary(BaseRLAviary):
                 # 0) 距离奖励
                 next_pos = pos + vel * self.CTRL_TIMESTEP
                 next_dist = np.linalg.norm(target_wp - next_pos)
-                rewards[i] += -1 * (next_dist - dist)*2500
+                rewards[i] += -1 * (next_dist - dist)*4.5
                 if self.IS_DEBUG:
                     print('当前位置：', pos, '目标位置：', target_wp, '距离：', dist, '下一步距离：', next_dist)
-                    print('距离奖励：', -1* (next_dist - dist)*2500)
+                    print('距离奖励：', -1* (next_dist - dist)*4.5)
     
-                # 1) 朝向 waypoint 的速度投影奖励
-                rewards[i] += float(np.dot(vel, dir_wp)) *50.0
+                # 1) 速度过高惩罚
+                vel_threshold = 1.6
+                if speed>vel_threshold:
+                    rewards[i] += -0.01 * (speed-vel_threshold)**2
                 if self.IS_DEBUG:
-                    print('朝向奖励：', float(np.dot(vel, dir_wp)) *50.0)
+                    print('速度过高惩罚：', -0.01 * (speed-vel_threshold)**2 if speed>vel_threshold else 0)
     
                 # 2) 高度
                 # rewards[i] += -(pos[2] - target_wp[2])**2 * 5.0
@@ -776,42 +904,43 @@ class GlobalPlannerAviary(BaseRLAviary):
                 # 3) 到达 waypoint 奖励
                 if dist < self.ARRIVAL_RADIUS:
                     if self.wp_counters[i] < self.num_waypoints - 1:
-                        rewards[i] += 100.0
+                        rewards[i] += 0.2
                         self.wp_counters[i] += 1
                         if self.IS_DEBUG:
-                            print('到达 waypoint 奖励：100.0, 下一个目标：wp%d' % self.wp_counters[i], 'wp位置：', target_wp)
+                            print('到达 waypoint 奖励：0.02, 下一个目标：wp%d' % self.wp_counters[i], 'wp位置：', target_wp)
                     else:
-                        rewards[i] += 1000.0
+                        rewards[i] += 0.5
                         if self.IS_DEBUG:
-                            print('到达最终目标奖励：1000.0')
+                            print('到达最终目标奖励：0.2')
     
                 # 4) 避障惩罚: 离最近障碍越近罚越多, 进入障碍体则大额惩罚
                 obs_threshold = 0.2
                 d_obs = self._min_obs_distance(pos)
                 if d_obs < 0.0:
-                    rewards[i] -= self.COLLISION_PENALTY
+                    rewards[i] -= self.COLLISION_PENALTY * 1e-3
                 elif d_obs < obs_threshold:
-                    rewards[i] -= (obs_threshold - d_obs) * 1.5
+                    rewards[i] -= (obs_threshold - d_obs) * 1.5 * 1e-3
                 if self.IS_DEBUG:
-                    print('避障惩罚：', -self.COLLISION_PENALTY if d_obs < 0.0 else (- (obs_threshold - d_obs) * 1.5 if d_obs < obs_threshold else 0.0))
+                    print('避障惩罚：', -self.COLLISION_PENALTY * 1e-3 if d_obs < 0.0 else (- (obs_threshold - d_obs) * 1.5 * 1e-3 if d_obs < obs_threshold else 0.0))
     
                 # 5) 坠地 / 飞出边界的软惩罚
                 (xr, yr, zr) = self.WORKSPACE
                 if (pos[0] < xr[0] or pos[0] > xr[1]
                     or pos[1] < yr[0] or pos[1] > yr[1]
                     or pos[2] < zr[0] or pos[2] > zr[1]):
-                    rewards[i] -= 5.0
+                    rewards[i] -= 5e-3
                 if self.IS_DEBUG:
-                    print('边界惩罚：', -5.0 if (pos[0] < xr[0] or pos[0] > xr[1]
+                    print('边界惩罚：', -5e-3 if (pos[0] < xr[0] or pos[0] > xr[1]
                         or pos[1] < yr[0] or pos[1] > yr[1]
                         or pos[2] < zr[0] or pos[2] > zr[1]) else 0.0)
                     
                 # 5.1) 反转惩罚
-                q = state[3:7]
-                if 1 - 2*(q[0]**2 + q[1]**2) < 0.0:  # roll 超过 90 度
-                    rewards[i] -= 500.0
+                roll, pitch, _ = state[7:10]
+                MAX_TILT = np.deg2rad(60)
+                if abs(roll) > MAX_TILT or abs(pitch) > MAX_TILT:
+                    rewards[i] -= 0.1
                 if self.IS_DEBUG:
-                    print('反转惩罚：', -500.0 if 1 - 2*(q[0]**2 + q[1]**2) < 0.0 else 0.0)
+                    print('反转惩罚：', -0.1 if abs(roll) > MAX_TILT or abs(pitch) > MAX_TILT else 0.0)
     
                 # 5.2) 过慢惩罚
                 # if speed < 0.25:
@@ -821,14 +950,14 @@ class GlobalPlannerAviary(BaseRLAviary):
     
                 # 6) 角度惩罚
                 row, pitch, yaw = state[7:10]
-                rewards[i]+=-1*(1.0 * row**2 + 1.0 * pitch**2 + 0.1 * yaw**2) * 300.0
+                rewards[i]+= - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0275 - (1.25*abs(row)+abs(pitch)) * 0.01
                 if self.IS_DEBUG:
-                    print(f'角度惩罚：{-1*(1.0 * row**2 + 1.0 * pitch**2 + 0.1 * yaw**2) * 300.0}')
+                    print(f'角度惩罚：{ - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0275- (1.25*abs(row)+abs(pitch)) * 0.01}')
                 
                 # 7) 生存惩罚
-                rewards[i] -= 0.2
+                rewards[i] -= 2e-4
                 if self.IS_DEBUG:
-                    print('生存惩罚：', -0.2)
+                    print('生存惩罚：', -2e-4)
     
                 if self.IS_DEBUG:
                     print(f"drone{i} dist={dist:.2f} d_obs={d_obs:.2f} "
@@ -861,16 +990,23 @@ class GlobalPlannerAviary(BaseRLAviary):
             pos = state[0:3]
             # 撞障碍 -> 终止
             if self._min_obs_distance(pos) < 0.0:
+                if self.RECORD and self.GUI:
+                    p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
                 return True
             # 坠地
             (xr, yr, zr) = self.WORKSPACE
             if (pos[0] < xr[0] or pos[0] > xr[1]
                 or pos[1] < yr[0] or pos[1] > yr[1]
                 or pos[2] < zr[0] or pos[2] > zr[1]):
+                if self.RECORD and self.GUI:
+                    p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
                 return True
             # 反转
-            q = state[3:7]
-            if 1 - 2*(q[0]**2 + q[1]**2) < 0.0:  # roll 超过 90 度
+            roll, pitch, _ = state[7:10]
+            MAX_TILT = np.deg2rad(60)
+            if abs(roll) > MAX_TILT or abs(pitch) > MAX_TILT:
+                if self.RECORD and self.GUI:
+                    p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
                 return True
         # 到达最终目标
         done_all = True
@@ -880,6 +1016,8 @@ class GlobalPlannerAviary(BaseRLAviary):
                             and np.linalg.norm(self.WAYPOINTS[-1] - pos)
                             < self.ARRIVAL_RADIUS)
             done_all = done_all and reached_last
+        if self.RECORD and self.GUI and done_all:
+            p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
         return done_all
 
     def _computeTruncated(self):
@@ -889,6 +1027,8 @@ class GlobalPlannerAviary(BaseRLAviary):
         )
         if truncated:
             self.episode_metrics["termination_reason"] = "timeout"
+            if self.RECORD and self.GUI:
+                p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
         return truncated
 
     def _computeInfo(self):

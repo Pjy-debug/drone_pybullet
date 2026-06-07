@@ -133,7 +133,7 @@ class BaseAviary(gym.Env):
         self.VISION_ATTR = vision_attributes
         if self.VISION_ATTR:
             self.IMG_RES = np.array([64, 48])
-            self.IMG_FRAME_PER_SEC = 24
+            self.IMG_FRAME_PER_SEC = 60  # 提高到60fps获得更流畅的视频
             self.IMG_CAPTURE_FREQ = int(self.PYB_FREQ/self.IMG_FRAME_PER_SEC)
             self.rgb = np.zeros(((self.NUM_DRONES, self.IMG_RES[1], self.IMG_RES[0], 4)))
             self.dep = np.ones(((self.NUM_DRONES, self.IMG_RES[1], self.IMG_RES[0])))
@@ -175,7 +175,7 @@ class BaseAviary(gym.Env):
                 #### Set the camera parameters to save frames in DIRECT mode
                 self.VID_WIDTH=int(640)
                 self.VID_HEIGHT=int(480)
-                self.FRAME_PER_SEC = 24
+                self.FRAME_PER_SEC = 60  # 提高到60fps获得更流畅的视频
                 self.CAPTURE_FREQ = int(self.PYB_FREQ/self.FRAME_PER_SEC)
                 self.CAM_VIEW = p.computeViewMatrixFromYawPitchRoll(distance=3,
                                                                     yaw=-30,
@@ -214,7 +214,7 @@ class BaseAviary(gym.Env):
         self._updateAndStoreKinematicInformation()
         #### Start video recording #################################
         self._startVideoRecording()
-        if self.GUI:
+        if self.GUI or self.RECORD:
             for i in range(self.NUM_DRONES):
                 init_pos = self.INIT_XYZS[i]
                 # 1. 在初始点画一个小的十字线
@@ -443,6 +443,7 @@ class BaseAviary(gym.Env):
         """
         if self.RECORD and self.GUI:
             p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
+        print('video closed')
         p.disconnect(physicsClientId=self.CLIENT)
     
     ################################################################################
@@ -552,14 +553,24 @@ class BaseAviary(gym.Env):
 
         """
         if self.RECORD and self.GUI:
+            video_record_path = os.path.join(self.OUTPUT_FOLDER, "video-"+datetime.now().strftime("%m.%d.%Y_%H.%M.%S")+".mp4")
+            parent_dir = os.path.dirname(video_record_path)
+            os.makedirs(parent_dir, exist_ok=True)
             self.VIDEO_ID = p.startStateLogging(loggingType=p.STATE_LOGGING_VIDEO_MP4,
-                                                fileName=os.path.join(self.OUTPUT_FOLDER, "video-"+datetime.now().strftime("%m.%d.%Y_%H.%M.%S")+".mp4"),
+                                                fileName=video_record_path,
                                                 physicsClientId=self.CLIENT
                                                 )
+            
         if self.RECORD and not self.GUI:
             self.FRAME_NUM = 0
             self.IMG_PATH = os.path.join(self.OUTPUT_FOLDER, "recording_" + datetime.now().strftime("%m.%d.%Y_%H.%M.%S"), '')
             os.makedirs(os.path.dirname(self.IMG_PATH), exist_ok=True)
+
+        # print("VIDEO_ID =", self.VIDEO_ID)
+        # print("OUTPUT_FOLDER =", self.OUTPUT_FOLDER)
+        # print("cwd =", os.getcwd())
+        # print('physicsClientId = ', self.CLIENT)
+        # print("VIDEO PATH =", os.path.abspath(os.path.join(self.OUTPUT_FOLDER, "video-"+datetime.now().strftime("%m.%d.%Y_%H.%M.%S")+".mp4")))
     
     ################################################################################
 

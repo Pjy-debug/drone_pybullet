@@ -48,7 +48,7 @@ DEFAULT_OBS = ObservationType.KIN # 运动学观测
 DEFAULT_ACT = ActionType.RPM   # 推荐使用速度控制 ('pid') 以实现更好的路径追踪
 DEFAULT_AGENTS = 1
 DEFAULT_MA = False
-DEFAULT_TASK = "global"  # 场景难度: 'easy' / 'short' / 'medium' / 'global'
+DEFAULT_TASK = "fix"  # 场景难度: 'easy' / 'short' / 'medium' / 'global'
 LOG_STD_INIT = -1  # PPO 初始 log_std (较小值鼓励更确定的动作)
 
 # --- wandb ---
@@ -66,7 +66,7 @@ NUM_OBSTACLES  = 2     # 沿连线放置的障碍数
 
 from stable_baselines3.common.callbacks import BaseCallback
 
-def linear_schedule_with_min(initial_value, min_lr=5e-5):
+def linear_schedule_with_min(initial_value, min_lr=2e-4):
     def func(progress_remaining):
         return min_lr + (initial_value - min_lr) * progress_remaining
     return func
@@ -82,6 +82,25 @@ class IterationCounterCallback(BaseCallback):
     def _on_rollout_end(self) -> None:
         self.iteration += 1
         print(f"[INFO] 当前训练轮次 (PPO update): {self.iteration}")
+
+class AdvDebugCallback(BaseCallback):
+    def _on_step(self) -> bool:
+        # 实现基类的抽象方法，保持回调可被实例化
+        return True
+
+    def _on_rollout_end(self):
+
+        adv = self.model.rollout_buffer.advantages
+
+        print(
+            "adv:",
+            adv.mean(),
+            adv.std(),
+            adv.min(),
+            adv.max()
+        )
+
+        return True
 
 class TqdmCallback(BaseCallback):
     def __init__(self, total_timesteps):
@@ -99,6 +118,44 @@ class TqdmCallback(BaseCallback):
 
     def _on_training_end(self):
         self.pbar.close()
+
+import numpy as np
+from stable_baselines3.common.callbacks import BaseCallback
+
+class ParamChangeCallback(BaseCallback):
+
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self.prev_actor_params = None
+
+    # ✅ 必须加这个（哪怕不用）
+    def _on_step(self) -> bool:
+        return True
+
+    def _get_actor_params(self):
+        return np.concatenate([
+            p.detach().cpu().numpy().ravel()
+            for p in self.model.policy.action_net.parameters()
+        ])
+
+    def _on_rollout_end(self) -> bool:
+
+        curr_params = self._get_actor_params()
+
+        if self.prev_actor_params is not None:
+            delta = np.linalg.norm(curr_params - self.prev_actor_params)
+
+            print(
+                f"[Actor param change] "
+                f"step={self.num_timesteps} "
+                f"delta={delta:.6e}"
+            )
+
+            self.logger.record("debug/actor_param_change", delta)
+
+        self.prev_actor_params = curr_params.copy()
+
+        return True
 
 def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO, local=True, timesteps=DEFAULT_TIMESTEPS, resume=None, task=DEFAULT_TASK, ActionType=DEFAULT_ACT):
     print('===== 训练配置 =====')
@@ -179,9 +236,9 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
             tensorboard_log=tb_dir,
             # 覆盖部分超参 (以防旧 ckpt 超参不合适)
             custom_objects={
-                'learning_rate': linear_schedule_with_min(1e-4),
+                'learning_rate': linear_schedule_with_min(3e-4),
                 'clip_range': 0.15,
-                'ent_coef': 0.005,
+                'ent_coef': 0.001,
             },
         )
     else:
@@ -191,7 +248,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                     ),
                     env = train_env,
                     tensorboard_log=tb_dir,
-                    learning_rate=linear_schedule_with_min(1e-4),
+                    learning_rate=linear_schedule_with_min(3e-4),
                     n_steps=512,
                     batch_size=1024,
                     n_epochs=10,
@@ -220,6 +277,8 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
                                  render=False)
 
     iteration_callback = IterationCounterCallback()
+    advDebugCallback = AdvDebugCallback()
+    param_callback = ParamChangeCallback()
     total_timesteps = timesteps if local else int(1e4)
     tqdm_callback = TqdmCallback(total_timesteps)
     wandb_callback = WandbCallback(
@@ -239,7 +298,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
         save_vecnormalize=False,
     )
     model.learn(total_timesteps=total_timesteps,
-                callback=[eval_callback, iteration_callback, tqdm_callback,
+                callback=[eval_callback, iteration_callback, advDebugCallback, param_callback, tqdm_callback,
                           wandb_callback, checkpoint_callback],
                 log_interval=2,
                 reset_num_timesteps=(resume is None))

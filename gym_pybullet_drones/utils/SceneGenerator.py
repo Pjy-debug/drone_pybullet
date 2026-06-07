@@ -272,4 +272,28 @@ class SceneGenerator:
             obstacles.append((obs_pos, obs_radius))
         return start, goal, obstacles
     
+    def generate_fix(self):
+        """
+        生成一个固定路径（确定性），并将工作空间设置为
+        workspace = ((-1.0, 5.0), (-3.0, 3.0), (-0.1, 2.5))
+
+        返回: start, goal, obstacles
+        """
+        # 固定 workspace
+        self.x_range = (-1.0, 5.0)
+        self.y_range = (-3.0, 3.0)
+        self.z_range = (-0.1, 2.5)
+
+        # 固定起点（靠近左侧平面，低高度）
+        start = np.array([self.x_range[0] + 0.5, 0.0, 0.0135])
+
+        # 固定终点（靠近右侧平面，中高度）
+        goal = np.array([self.x_range[1] - 0.5, 0.0, 1.2])
+        # 固定一些障碍物，位置在工作空间内
+        obstacles = []
+
+        obstacles.append((np.array([3.5, 0.0, 1.0]), 0.35))
+        obstacles.append((np.array([1.8, 0.3, 0.3]), 0.3))
+        return start, goal, obstacles
+    
     
