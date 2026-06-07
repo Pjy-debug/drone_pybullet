@@ -950,9 +950,9 @@ class GlobalPlannerAviary(BaseRLAviary):
     
                 # 6) 角度惩罚
                 row, pitch, yaw = state[7:10]
-                rewards[i]+= - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0275 - (1.25*abs(row)+abs(pitch)) * 0.01
+                rewards[i]+= - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0295 - (1.25*abs(row)+abs(pitch)) * 0.01
                 if self.IS_DEBUG:
-                    print(f'角度惩罚：{ - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0275- (1.25*abs(row)+abs(pitch)) * 0.01}')
+                    print(f'角度惩罚：{ - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0295- (1.25*abs(row)+abs(pitch)) * 0.01}')
                 
                 # 7) 生存惩罚
                 rewards[i] -= 2e-4
