@@ -44,7 +44,7 @@ class GlobalPlannerAviary(BaseRLAviary):
                  arrival_radius: float = 0.15,
                  workspace_bounds=((-1.0, 5.0), (-3.0, 3.0), (-0.1, 2.5)),
                  act_scale: float = None,   # 预留, 当前未使用
-                 collision_penalty: float = 50.0,
+                 collision_penalty: float = 10.0,
                  # --- 简化任务: start / goal 在小球形区域随机, 障碍生成在连线上 ---
                  simple_scene: bool = True,
                  start_center=(0.0, 0.0, 1.0),
@@ -89,13 +89,17 @@ class GlobalPlannerAviary(BaseRLAviary):
         self._goal_center = tuple(goal_center)
         self._region_radius = float(region_radius)
         self._num_obstacles = int(num_obstacles)
-
-        random_start, random_goal, random_obstacles = self._sample_scene(workspace_bounds)
-        self.START = np.asarray(random_start, dtype=float)
-        self.GOAL = np.asarray(random_goal, dtype=float)
-        # 注意: BaseAviary 存在同名 bool 属性 self.OBSTACLES (在 super().__init__ 里赋值),
-        # 这里用 OBSTACLE_LIST 避免被父类覆盖.
-        self.OBSTACLE_LIST = random_obstacles if random_obstacles is not None else default_obstacles()
+        if self.task != 'given':
+            random_start, random_goal, random_obstacles = self._sample_scene(workspace_bounds)
+            self.START = np.asarray(random_start, dtype=float)
+            self.GOAL = np.asarray(random_goal, dtype=float)
+            # 注意: BaseAviary 存在同名 bool 属性 self.OBSTACLES (在 super().__init__ 里赋值),
+            # 这里用 OBSTACLE_LIST 避免被父类覆盖.
+            self.OBSTACLE_LIST = random_obstacles if random_obstacles is not None else default_obstacles()
+        else:
+            self.START = np.asarray(start_center, dtype=float)
+            self.GOAL = np.asarray(goal_center, dtype=float)  
+            self.OBSTACLE_LIST = obstacles
         self.ARRIVAL_RADIUS = arrival_radius
         self.COLLISION_PENALTY = collision_penalty
         self.WORKSPACE = workspace_bounds
@@ -318,9 +322,12 @@ class GlobalPlannerAviary(BaseRLAviary):
         """按当前模式随机生成 (start, goal, obstacles)."""
         (xr, yr, zr) = workspace_bounds
         scene_gen = SceneGenerator(x_range=xr, y_range=yr, z_range=zr)
+
         if self._simple_scene:
             if self.task == 'fix':
                 return scene_gen.generate_fix()
+            if self.task == 'fix_random':
+                return scene_gen.generate_fix_randomized()
             if self.task == 'easy':
                 return scene_gen.generate_takeoff()
             elif self.task == 'short':
@@ -514,13 +521,14 @@ class GlobalPlannerAviary(BaseRLAviary):
         if self.IS_DEBUG:
             print('\n[GlobalPlannerAviary] reset called. 重新规划路径, 重置 waypoint 计数器.')
         self.start_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        random_start, random_goal, random_obstacles = self._sample_scene(self.WORKSPACE)
-        self.START = np.asarray(random_start, dtype=float)
-        self.INIT_XYZS = self.START.reshape(1, 3)
-        self.GOAL = np.asarray(random_goal, dtype=float)
-        # 注意: BaseAviary 存在同名 bool 属性 self.OBSTACLES (在 super().__init__ 里赋值),
-        # 这里用 OBSTACLE_LIST 避免被父类覆盖.
-        self.OBSTACLE_LIST = random_obstacles if random_obstacles is not None else default_obstacles()
+        if self.task != 'given':
+            random_start, random_goal, random_obstacles = self._sample_scene(self.WORKSPACE)
+            self.START = np.asarray(random_start, dtype=float)
+            self.INIT_XYZS = self.START.reshape(1, 3)
+            self.GOAL = np.asarray(random_goal, dtype=float)
+            # 注意: BaseAviary 存在同名 bool 属性 self.OBSTACLES (在 super().__init__ 里赋值),
+            # 这里用 OBSTACLE_LIST 避免被父类覆盖.
+            self.OBSTACLE_LIST = random_obstacles if random_obstacles is not None else default_obstacles()
         # --- 跑 A*, 生成 waypoints ---
         self.WAYPOINTS = self._plan_path()
 
@@ -890,7 +898,7 @@ class GlobalPlannerAviary(BaseRLAviary):
                     print('距离奖励：', -1* (next_dist - dist)*4.5)
     
                 # 1) 速度过高惩罚
-                vel_threshold = 1.6
+                vel_threshold = 1.5
                 if speed>vel_threshold:
                     rewards[i] += -0.01 * (speed-vel_threshold)**2
                 if self.IS_DEBUG:
@@ -904,14 +912,14 @@ class GlobalPlannerAviary(BaseRLAviary):
                 # 3) 到达 waypoint 奖励
                 if dist < self.ARRIVAL_RADIUS:
                     if self.wp_counters[i] < self.num_waypoints - 1:
-                        rewards[i] += 0.2
+                        rewards[i] += 0.5
                         self.wp_counters[i] += 1
                         if self.IS_DEBUG:
-                            print('到达 waypoint 奖励：0.02, 下一个目标：wp%d' % self.wp_counters[i], 'wp位置：', target_wp)
+                            print('到达 waypoint 奖励：0.2, 下一个目标：wp%d' % self.wp_counters[i], 'wp位置：', target_wp)
                     else:
-                        rewards[i] += 0.5
+                        rewards[i] += 5.0
                         if self.IS_DEBUG:
-                            print('到达最终目标奖励：0.2')
+                            print('到达最终目标奖励：0.5')
     
                 # 4) 避障惩罚: 离最近障碍越近罚越多, 进入障碍体则大额惩罚
                 obs_threshold = 0.2
@@ -943,16 +951,24 @@ class GlobalPlannerAviary(BaseRLAviary):
                     print('反转惩罚：', -0.1 if abs(roll) > MAX_TILT or abs(pitch) > MAX_TILT else 0.0)
     
                 # 5.2) 过慢惩罚
-                # if speed < 0.25:
-                #     rewards[i] -= (0.25 - speed)**2 *50.0
-                # if self.IS_DEBUG:
-                #     print('过慢惩罚：', -(0.25 - speed)**2 *50.0 if speed < 0.5 else 0.0)
+                if speed < 0.25:
+                    rewards[i] -= (0.25 - speed)**2 * 0.3
+                if self.IS_DEBUG:
+                    print('过慢惩罚：', -(0.25 - speed)**2 * 0.3 if speed < 0.25 else 0.0)
     
                 # 6) 角度惩罚
                 row, pitch, yaw = state[7:10]
-                rewards[i]+= - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0295 - (1.25*abs(row)+abs(pitch)) * 0.01
+                rewards[i]+= - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0275 - (1.25*abs(row)+abs(pitch)) * 0.002
                 if self.IS_DEBUG:
-                    print(f'角度惩罚：{ - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0295- (1.25*abs(row)+abs(pitch)) * 0.01}')
+                    print(f'角度惩罚：{ - 1.0 * (1.25 * row**2 + 1.0 * pitch**2) * 0.0275- (1.25*abs(row)+abs(pitch)) * 0.002}')
+
+                # 6.1) 角速度惩罚
+                omega = np.linalg.norm(state[13:16])
+
+                rewards[i] -= 0.001 * omega**2
+
+                if self.IS_DEBUG:
+                    print(f'角速度惩罚：{-0.001 * omega**2}')
                 
                 # 7) 生存惩罚
                 rewards[i] -= 2e-4
@@ -992,6 +1008,8 @@ class GlobalPlannerAviary(BaseRLAviary):
             if self._min_obs_distance(pos) < 0.0:
                 if self.RECORD and self.GUI:
                     p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
+                if self.IS_DEBUG:
+                    print('撞到障碍物')
                 return True
             # 坠地
             (xr, yr, zr) = self.WORKSPACE
@@ -1000,6 +1018,8 @@ class GlobalPlannerAviary(BaseRLAviary):
                 or pos[2] < zr[0] or pos[2] > zr[1]):
                 if self.RECORD and self.GUI:
                     p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
+                if self.IS_DEBUG:
+                    print('坠地')
                 return True
             # 反转
             roll, pitch, _ = state[7:10]
@@ -1007,6 +1027,8 @@ class GlobalPlannerAviary(BaseRLAviary):
             if abs(roll) > MAX_TILT or abs(pitch) > MAX_TILT:
                 if self.RECORD and self.GUI:
                     p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
+                if self.IS_DEBUG:
+                    print('反转')
                 return True
         # 到达最终目标
         done_all = True
@@ -1018,6 +1040,8 @@ class GlobalPlannerAviary(BaseRLAviary):
             done_all = done_all and reached_last
         if self.RECORD and self.GUI and done_all:
             p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
+        if self.IS_DEBUG:
+            print('到达终点')
         return done_all
 
     def _computeTruncated(self):
@@ -1029,6 +1053,8 @@ class GlobalPlannerAviary(BaseRLAviary):
             self.episode_metrics["termination_reason"] = "timeout"
             if self.RECORD and self.GUI:
                 p.stopStateLogging(self.VIDEO_ID, physicsClientId=self.CLIENT)
+            if self.IS_DEBUG:
+                print('truncated')
         return truncated
 
     def _computeInfo(self):

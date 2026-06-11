@@ -296,4 +296,42 @@ class SceneGenerator:
         obstacles.append((np.array([1.8, 0.3, 0.3]), 0.3))
         return start, goal, obstacles
     
+    def generate_fix_randomized(self):
     
+        start = np.array([
+            -0.5 + np.random.uniform(-0.0,0.25),
+            np.random.uniform(-0.25,0.25),
+            0.0135
+        ])
+    
+        goal = np.array([
+            4.5 + np.random.uniform(-0.25,0.0),
+            np.random.uniform(-0.5,0.5),
+            np.random.uniform(0.6,1.0)
+        ])
+    
+        obstacles = []
+    
+        obstacles.append((
+            np.array([
+                1.8 + np.random.uniform(-0.25,0.25),
+                0.3 + np.random.uniform(-0.25,0.25),
+                0.3 + np.random.uniform(-0.25,0.25)
+            ]),
+            np.random.uniform(0.25,0.35)
+        ))
+    
+        obstacles.append((
+            np.array([
+                3.5 + np.random.uniform(-0.25,0.25),
+                0.0 + np.random.uniform(-0.25,0.25),
+                1.0 + np.random.uniform(-0.25,0.25)
+            ]),
+            np.random.uniform(0.30,0.40)
+        ))
+
+        print('start = ', start)
+        print('goal = ', goal)
+        print('obstacles = ', obstacles)
+    
+        return start, goal, obstacles

@@ -18,19 +18,72 @@ from envs.GlobalPlannerAviary import GlobalPlannerAviary
 from utils.Logger import Logger
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 
-# --- 配置参数 (需与训练时保持一致) ---
-MODEL_PATH = "D:\homework\Grade3_2\drone\gym-pybullet-drones-main\\results\save-06.07.2026_15.25.41\\best_model.zip"
-GUI = True       # 测试时建议打开可视化
-RECORD_VIDEO = False
-NUM_EPISODES = 30  # 测试的回合数
+from pathlib import Path
+from datetime import datetime
+import re
 
-CUSTOM_START = np.array([0.0, 0.0, 0.0])
-CUSTOM_GOAL  = np.array([3.5, 0.0, 1.2])
-CUSTOM_OBSTACLES = [
-    (np.array([1.0, 0.2, 1.0]), 0.35),
-    (np.array([2.2, -0.3, 1.3]), 0.4),
-    (np.array([1.5, 1.5, 0.8]), 0.3),
-]
+
+def get_latest_checkpoint(results_dir="results"):
+    results_dir = Path(results_dir)
+
+    # 1. 找最新 save-*
+    save_dirs = []
+    for d in results_dir.glob("save-*"):
+        if not d.is_dir():
+            continue
+
+        try:
+            timestamp = datetime.strptime(
+                d.name.replace("save-", ""),
+                "%m.%d.%Y_%H.%M.%S"
+            )
+            save_dirs.append((timestamp, d))
+        except ValueError:
+            pass
+
+    if not save_dirs:
+        raise FileNotFoundError("No save-* directory found")
+
+    latest_save_dir = max(save_dirs, key=lambda x: x[0])[1]
+
+    # 2. 找最新 checkpoint
+    ckpt_dir = latest_save_dir / "ckpt"
+
+    best_file = None
+    best_step = -1
+
+    for f in ckpt_dir.glob("ppo_ckpt_*_steps.zip"):
+        m = re.search(r"ppo_ckpt_(\d+)_steps\.zip$", f.name)
+        if not m:
+            continue
+
+        step = int(m.group(1))
+
+        if step > best_step:
+            best_step = step
+            best_file = f
+
+    if best_file is None:
+        raise FileNotFoundError(
+            f"No checkpoint found in {ckpt_dir}"
+        )
+
+    return str(best_file)
+
+
+# --- 配置参数 (需与训练时保持一致) ---
+MODEL_PATH = get_latest_checkpoint()
+MODEL_PATH = "results\save-06.09.2026_17.14.08\\final_model.zip"
+print('model path: ', MODEL_PATH)
+
+
+GUI = False      # 测试时建议打开可视化
+RECORD_VIDEO = True
+NUM_EPISODES = 1  # 测试的回合数
+
+CUSTOM_START = np.array([-0.39261049,  0.22598737,  0.0135 ])
+CUSTOM_GOAL  = np.array([3.85727348 ,0.28812231 ,0.79766399])
+CUSTOM_OBSTACLES =[(np.array([2.28179884, 0.43171167, 0.29304826]), 0.2662542617605774), (np.array([3.29793735e+00, 5.52543941e-04, 1.39853474e+00]), 0.3152966572017165)]
 
 
 
@@ -40,12 +93,14 @@ def test():
         gui=GUI,
         start=CUSTOM_START,
         goal=CUSTOM_GOAL,
+        start_center = CUSTOM_START,
+        goal_center = CUSTOM_GOAL,
         obstacles=CUSTOM_OBSTACLES,
         obs=ObservationType.KIN,
         act = ActionType.RPM,
         record=RECORD_VIDEO,
         IS_DEBUG = False,
-        task="fix",
+        task="given",
         mode = "testing",
         output_folder = "results_test"
     )
